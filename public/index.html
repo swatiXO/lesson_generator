@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lesson & Courseware Generator — Mediatiz</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green:      #1A7A4A;
+    --blue:       #1F5C99;
+    --lightblue:  #2E75B6;
+    --accent:     #E8F4FD;
+    --grey:       #6C757D;
+    --lightgrey:  #F8F9FA;
+    --border:     #DEE2E6;
+    --text:       #212529;
+    --success:    #198754;
+    --warning:    #856404;
+    --danger:     #DC3545;
+    --purple:     #5B2C8D;
+    --darkbg:     #0D1B2A;
+  }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #F0F4F8;
+    color: var(--text);
+    min-height: 100vh;
+    padding-bottom: 60px;
+  }
+
+  /* ── Header ── */
+  header {
+    background: linear-gradient(135deg, var(--blue) 0%, #153E66 100%);
+    color: white;
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  header h1 { font-size: 22px; font-weight: 700; }
+  header span { font-size: 13px; opacity: 0.9; margin-left: auto; }
+
+  .model-badge {
+    background: rgba(255,255,255,0.15);
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .model-badge.ok  { background: rgba(25,135,84,0.45); border: 1px solid rgba(25,135,84,0.5); }
+  .model-badge.err { background: rgba(220,53,69,0.45); border: 1px solid rgba(220,53,69,0.5); }
+
+  /* ── Layout ── */
+  main {
+    max-width: 1024px;
+    margin: 32px auto;
+    padding: 0 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+    overflow: hidden;
+    border: 1px solid var(--border);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 24px;
+    background: var(--lightgrey);
+    border-bottom: 1px solid var(--border);
+  }
+  .step-badge {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--blue);
+    color: white;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+    flex-shrink: 0;
+  }
+  .step-badge.done { background: var(--success); }
+  .step-badge.active { background: var(--blue); box-shadow: 0 0 0 4px rgba(31,92,153,0.2); }
+  .card-header h2 { font-size: 17px; font-weight: 600; color: var(--text); }
+  .card-header .sub { font-size: 13px; color: var(--grey); margin-left: auto; }
+  .card-body { padding: 24px; }
+
+  /* ── Form inputs ── */
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--grey); }
+  textarea {
+    width: 100%;
+    min-height: 180px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.15s;
+  }
+  textarea:focus { outline: none; border-color: var(--blue); }
+
+  .row { display: flex; gap: 16px; align-items: flex-end; }
+  .row .field { flex: 1; }
+
+  select {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    background: white;
+  }
+  select:focus { outline: none; border-color: var(--blue); }
+
+  /* ── Toggle switch ── */
+  .switch-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #E8F4FD;
+    padding: 12px 16px;
+    border-radius: 8px;
+    border: 1px solid #B8D8F0;
+    margin-bottom: 16px;
+  }
+  .switch-container label {
+    margin-bottom: 0;
+    font-weight: normal;
+    color: var(--blue);
+    cursor: pointer;
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    padding: 10px 24px;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-primary  { background: var(--blue);    color: white; }
+  .btn-primary:hover:not(:disabled)  { background: #174a80; }
+  .btn-success  { background: var(--success); color: white; }
+  .btn-success:hover:not(:disabled)  { background: #146c43; }
+  .btn-danger   { background: var(--danger);  color: white; }
+  .btn-danger:hover:not(:disabled)   { background: #b02a37; }
+  .btn-outline  { background: white; color: var(--blue); border: 1.5px solid var(--blue); }
+  .btn-outline:hover:not(:disabled)  { background: var(--accent); }
+  .btn-download { background: var(--green);   color: white; font-size: 16px; padding: 14px 32px; box-shadow: 0 4px 12px rgba(26,122,74,0.3); }
+  .btn-download:hover:not(:disabled) { background: #145a37; }
+
+  .btn-row { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+
+  /* ── Structure preview ── */
+  .structure-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .lesson-card {
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    background: var(--lightgrey);
+  }
+  .lesson-card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--blue);
+    margin-bottom: 6px;
+  }
+  .lesson-card p { font-size: 13px; color: var(--grey); margin-bottom: 10px; }
+  .slo-chip {
+    display: inline-block;
+    background: var(--accent);
+    color: var(--blue);
+    border: 1px solid #B8D8F0;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    margin: 2px;
+  }
+
+  /* ── Progress section ── */
+  .progress-track {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .progress-bar-wrap {
+    background: var(--lightgrey);
+    border-radius: 8px;
+    height: 10px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--blue), var(--green));
+    border-radius: 8px;
+    transition: width 0.4s ease;
+  }
+  .progress-label {
+    font-size: 13px;
+    color: var(--grey);
+    display: flex;
+    justify-content: space-between;
+  }
+  .progress-label strong { color: var(--text); }
+
+  .lesson-progress {
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .lesson-progress-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--lightgrey);
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .section-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 12px 16px;
+  }
+  .section-chip {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1.5px solid var(--border);
+    background: white;
+    color: var(--grey);
+    transition: all 0.2s;
+  }
+  .section-chip.active  { border-color: var(--blue);    background: var(--accent);   color: var(--blue);    }
+  .section-chip.done    { border-color: var(--success);  background: #D1E7DD;          color: var(--success); }
+  .section-chip.error   { border-color: var(--danger);   background: #F8D7DA;          color: var(--danger);  }
+
+  /* ── Live token stream ── */
+  .token-stream {
+    background: var(--darkbg);
+    color: #00FF88;
+    padding: 14px 18px;
+    border-radius: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    height: 140px;
+    overflow-y: auto;
+    line-height: 1.5;
+    margin-top: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border: 1px solid #1f354f;
+  }
+
+  /* ── Warnings list ── */
+  .validation-log {
+    margin-top: 12px;
+    max-height: 150px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: #FFF3CD;
+  }
+  .validation-warning-item {
+    font-size: 12px;
+    color: #856404;
+    margin-bottom: 6px;
+    border-bottom: 1px dashed rgba(133,100,4,0.2);
+    padding-bottom: 4px;
+  }
+
+  /* ── Status messages ── */
+  .alert {
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .alert-info    { background: var(--accent); border: 1px solid #B8D8F0; color: var(--blue); }
+  .alert-success { background: #D1E7DD; border: 1px solid #A3CFB8; color: var(--success); }
+  .alert-danger  { background: #F8D7DA; border: 1px solid #F1AEB5; color: var(--danger); }
+  .alert-warning { background: #FFF3CD; border: 1px solid #FFE069; color: var(--warning); }
+
+  /* ── Previewer Tabs ── */
+  .preview-section {
+    margin-top: 32px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    background: white;
+  }
+  .tabs {
+    display: flex;
+    background: var(--lightgrey);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .tab-btn {
+    padding: 14px 20px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--grey);
+    border-bottom: 3px solid transparent;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .tab-btn:hover { color: var(--blue); background: rgba(31,92,153,0.05); }
+  .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); background: white; }
+  
+  .tab-content {
+    padding: 24px;
+    display: none;
+    max-height: 600px;
+    overflow-y: auto;
+  }
+  .tab-content.active { display: block; }
+  .tab-content h3 { font-size: 18px; margin-bottom: 12px; color: var(--blue); }
+  .tab-content p { font-size: 14px; margin-bottom: 12px; line-height: 1.6; }
+  
+  /* ── Download section ── */
+  .download-section {
+    text-align: center;
+    padding: 40px 24px;
+    background: linear-gradient(135deg, #E8F4FD 0%, #E8F5EE 100%);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+  .download-section h3 { font-size: 24px; margin-bottom: 8px; color: var(--green); }
+  .download-section p  { color: var(--grey); margin-bottom: 24px; }
+
+  /* ── Spinner ── */
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,0.4);
+    border-top-color: white;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .hidden { display: none !important; }
+
+  .overview-box {
+    background: var(--accent);
+    border: 1px solid #B8D8F0;
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-top: 16px;
+  }
+  .overview-box h3 { font-size: 16px; font-weight: 700; color: var(--blue); margin-bottom: 6px; }
+  .overview-box p  { font-size: 14px; color: var(--text); line-height: 1.6; }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="font-size:24px">📚</div>
+  <h1>Automated Lesson & Courseware Generation System</h1>
+  <div class="model-badge" id="modelBadge">Checking model...</div>
+  <span>qwen2.5:14b + Tesseract + RAG</span>
+</header>
+
+<main>
+
+  <!-- ── STEP 1: Input ── -->
+  <div class="card" id="step1Card">
+    <div class="card-header">
+      <div class="step-badge active" id="badge1">1</div>
+      <h2>Enter SLOs and Configuration</h2>
+      <span class="sub">Specify parameters and learning outcomes</span>
+    </div>
+    <div class="card-body">
+
+      <div class="alert alert-info">
+        💡 Ground facts in curriculum textbooks automatically. The system will retrieve relevant context for math SLOs.
+      </div>
+
+      <div class="row" style="margin-bottom:16px">
+        <div class="field">
+          <label>Grade</label>
+          <select id="gradeSelect">
+            <option value="3">Grade 3</option>
+            <option value="4" selected>Grade 4</option>
+            <option value="5">Grade 5</option>
+            <option value="6">Grade 6</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Subject</label>
+          <select id="subjectSelect">
+            <option value="Mathematics" selected>Mathematics</option>
+            <option value="Science">Science</option>
+            <option value="English">English</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="switch-container">
+        <input type="checkbox" id="disableVerificationCheck" checked>
+        <label for="disableVerificationCheck"><strong>Disable AI Vision Image Verification</strong> (Speeds up generation, accepts searched images directly without LLM confirmation)</label>
+      </div>
+
+      <label>Student Learning Outcomes (SLOs)</label>
+      <textarea id="slosInput" placeholder="Paste your SLOs here. Example:
+
+M-04-A-19: Differentiate among proper fractions, improper fractions and mixed numbers.
+M-04-A-20: Convert improper fractions to mixed numbers and vice versa.
+M-04-A-21: Compare and order unlike fractions."></textarea>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="generateStructureBtn" onclick="generateStructure()">
+          <span>✨ Generate Chapter Structure</span>
+        </button>
+        <button class="btn btn-outline" onclick="loadExample()">Load Example SLOs</button>
+      </div>
+
+      <div id="structureLoading" class="hidden" style="margin-top:16px">
+        <div class="alert alert-info">
+          <div class="spinner" style="border-color:rgba(31,92,153,0.3); border-top-color:var(--blue)"></div>
+          <span>Planning chapter structure... This may take 20–45 seconds.</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── STEP 2: Review Structure ── -->
+  <div class="card hidden" id="step2Card">
+    <div class="card-header">
+      <div class="step-badge" id="badge2">2</div>
+      <h2>Review Chapter Structure</h2>
+      <span class="sub">Verify lessons before initiating content generation</span>
+    </div>
+    <div class="card-body">
+
+      <div id="chapterOverview" class="overview-box"></div>
+      <div id="structureGrid" class="structure-grid"></div>
+
+      <div class="btn-row" style="margin-top:20px">
+        <button class="btn btn-success" id="startGenBtn" onclick="startGeneration()">
+          ✅ Looks Good — Generate All Courseware
+        </button>
+        <button class="btn btn-outline" onclick="resetAll()">↩ Start Over</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── STEP 3: Generation Progress ── -->
+  <div class="card hidden" id="step3Card">
+    <div class="card-header">
+      <div class="step-badge" id="badge3">3</div>
+      <h2>Generating Content & Media Assets</h2>
+      <span class="sub" id="progressLabel">Initializing generation loop...</span>
+    </div>
+    <div class="card-body">
+
+      <div style="margin-bottom:20px">
+        <div class="progress-label">
+          <strong id="progressText">0%</strong>
+          <span id="progressDetail">—</span>
+        </div>
+        <div class="progress-bar-wrap" style="margin-top:8px">
+          <div class="progress-bar" id="progressBar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <div class="progress-track" id="progressTrack"></div>
+
+      <div class="token-stream hidden" id="tokenStream"></div>
+
+      <div class="validation-log hidden" id="validationLog">
+        <strong>⚠️ Self-Correction Logs:</strong>
+        <div id="validationLogItems"></div>
+      </div>
+
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn btn-outline" id="toggleStreamBtn" onclick="toggleStream()">👁 Show Live Content Output</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── STEP 4: Previews & Download ── -->
+  <div class="card hidden" id="step4Card">
+    <div class="card-body">
+      <div class="download-section">
+        <div style="font-size:48px;margin-bottom:12px">🎉</div>
+        <h3>Courseware Bundle is Ready!</h3>
+        <p id="downloadSummary">All artifacts generated, validated, and rendered successfully.</p>
+        <button class="btn btn-download" onclick="downloadBundle()">
+          📄 Download Courseware ZIP Bundle
+        </button>
+        <div style="margin-top:20px">
+          <button class="btn btn-outline" onclick="resetAll()">Generate Another Chapter</button>
+        </div>
+      </div>
+
+      <!-- Preview tabs -->
+      <div class="preview-section">
+        <div class="tabs">
+          <button class="tab-btn active" onclick="switchTab('lessonPreview')">Lesson Plan</button>
+          <button class="tab-btn" onclick="switchTab('slidesPreview')">Slides Outline</button>
+          <button class="tab-btn" onclick="switchTab('scriptPreview')">Video Scripts</button>
+          <button class="tab-btn" onclick="switchTab('unitPreview')">Unit Assessment</button>
+          <button class="tab-btn" onclick="switchTab('reportPreview')">Audit & RAG Logs</button>
+        </div>
+
+        <div id="lessonPreview" class="tab-content active">
+          <h3>Generated Lesson Content</h3>
+          <div id="lessonPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
+        </div>
+
+        <div id="slidesPreview" class="tab-content">
+          <h3>Presentation Slides</h3>
+          <div id="slidesPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
+        </div>
+
+        <div id="scriptPreview" class="tab-content">
+          <h3>Lesson Video Scripts</h3>
+          <div id="scriptPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
+        </div>
+
+        <div id="unitPreview" class="tab-content">
+          <h3>Unit Assessment</h3>
+          <div id="unitPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
+        </div>
+
+        <div id="reportPreview" class="tab-content">
+          <h3>Validation & RAG Ingestion Logs</h3>
+          <div id="reportPreviewContent" style="font-size: 13px; color: #333;"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Error display ── -->
+  <div class="hidden" id="errorBox">
+    <div class="alert alert-danger" id="errorMsg"></div>
+  </div>
+
+</main>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+let structure = null;
+let lessonChips = {}; 
+let showStream = false;
+let tokenBuffer = '';
+
+// ── On load ───────────────────────────────────────────────────────
+window.addEventListener('load', async () => {
+  const badge = document.getElementById('modelBadge');
+  try {
+    const res = await fetch('/api/health');
+    const data = await res.json();
+    if (data.ollama && data.modelFound) {
+      badge.textContent = '✅ ' + data.model;
+      badge.className = 'model-badge ok';
+    } else if (data.ollama && !data.modelFound) {
+      badge.textContent = '⚠️ Model not found';
+      badge.className = 'model-badge err';
+      showError(`Ollama is running but qwen2.5:14b is not installed. Run: ollama pull qwen2.5:14b`);
+    } else {
+      badge.textContent = '❌ Ollama offline';
+      badge.className = 'model-badge err';
+      showError('Ollama is not running. Start it with: ollama serve');
+    }
+  } catch {
+    badge.textContent = '❌ Cannot connect';
+    badge.className = 'model-badge err';
+    showError('Cannot reach the server. Make sure you ran: node server.js');
+  }
+});
+
+// ── Step 1: Generate Structure ─────────────────────────────────────
+async function generateStructure() {
+  const slos = document.getElementById('slosInput').value.trim();
+  const grade = document.getElementById('gradeSelect').value;
+  const subject = document.getElementById('subjectSelect').value;
+  const disableVerification = document.getElementById('disableVerificationCheck').checked;
+
+  if (!slos) { showError('Please paste your SLOs first.'); return; }
+
+  clearError();
+  setLoading('generateStructureBtn', true, 'Planning...');
+  show('structureLoading');
+
+  try {
+    const res = await fetch('/api/structure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slos, grade, subject, disableVerification }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Structure plan failed');
+
+    structure = data.structure;
+    renderStructure(structure);
+    show('step2Card');
+    document.getElementById('badge1').className = 'step-badge done';
+    document.getElementById('badge1').textContent = '✓';
+    document.getElementById('badge2').className = 'step-badge active';
+    document.getElementById('step2Card').scrollIntoView({ behavior: 'smooth' });
+
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    setLoading('generateStructureBtn', false, '✨ Generate Chapter Structure');
+    hide('structureLoading');
+  }
+}
+
+function renderStructure(s) {
+  const { chapter, lessons } = s;
+
+  // Chapter overview
+  document.getElementById('chapterOverview').innerHTML = `
+    <h3>📖 Chapter ${chapter.number}: ${chapter.title} — Grade ${chapter.grade}</h3>
+    <p>${chapter.overview || ''}</p>
+  `;
+
+  // Lesson cards
+  const grid = document.getElementById('structureGrid');
+  grid.innerHTML = '';
+
+  lessons.forEach(lesson => {
+    const card = document.createElement('div');
+    card.className = 'lesson-card';
+    const chips = lesson.slos.map(c => `<span class="slo-chip">${c}</span>`).join('');
+    card.innerHTML = `
+      <h3>Lesson ${lesson.number}: ${lesson.title}</h3>
+      <p>${lesson.description}</p>
+      <div>${chips}</div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+// ── Step 2: Start generation ───────────────────────────────────────
+function startGeneration() {
+  if (!structure) return;
+
+  show('step3Card');
+  document.getElementById('badge2').className = 'step-badge done';
+  document.getElementById('badge2').textContent = '✓';
+  document.getElementById('badge3').className = 'step-badge active';
+  document.getElementById('step3Card').scrollIntoView({ behavior: 'smooth' });
+
+  buildProgressUI(structure.lessons);
+  listenToGeneration();
+}
+
+function buildProgressUI(lessons) {
+  const track = document.getElementById('progressTrack');
+  track.innerHTML = '';
+  lessonChips = {};
+
+  lessons.forEach(lesson => {
+    const block = document.createElement('div');
+    block.className = 'lesson-progress';
+    block.id = `lesson-block-${lesson.number}`;
+
+    const header = document.createElement('div');
+    header.className = 'lesson-progress-header';
+    header.innerHTML = `<span>📘</span> <span>Lesson ${lesson.number}: ${lesson.title}</span>`;
+    block.appendChild(header);
+
+    const chips = document.createElement('div');
+    chips.className = 'section-chips';
+
+    const sections = ['Warm-Up', 'Concept Building', 'Worked Examples', 'Pop-Up Quiz', 'Mental Maths', 'Practice Questions', 'Key Takeaways', 'Video Script'];
+    const sectionKeys = ['warmUp', 'conceptBuilding', 'examples', 'popUpQuiz', 'mentalMaths', 'practiceQuestions', 'keyTakeaways', 'videoScript'];
+
+    lessonChips[lesson.number] = {};
+
+    sections.forEach((label, i) => {
+      const chip = document.createElement('span');
+      chip.className = 'section-chip';
+      chip.id = `chip-${lesson.number}-${sectionKeys[i]}`;
+      chip.textContent = label;
+      chips.appendChild(chip);
+      lessonChips[lesson.number][sectionKeys[i]] = chip;
+    });
+
+    block.appendChild(chips);
+    track.appendChild(block);
+  });
+
+  // Global assessment block
+  const block = document.createElement('div');
+  block.className = 'lesson-progress';
+  block.id = 'assessment-block';
+  block.innerHTML = `
+    <div class="lesson-progress-header">
+      <span>📝</span> <span>Global Chapter Materials</span>
+    </div>
+    <div class="section-chips">
+      <span class="section-chip" id="chip-0-unitAssessment">Unit Assessment</span>
+    </div>
+  `;
+  track.appendChild(block);
+}
+
+function listenToGeneration() {
+  const evtSource = new EventSource('/api/generate');
+  const tokenEl = document.getElementById('tokenStream');
+  const logContainer = document.getElementById('validationLog');
+  const logItems = document.getElementById('validationLogItems');
+
+  evtSource.onmessage = async (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'section_start') {
+      const label = msg.lessonNum > 0 ? `Lesson ${msg.lessonNum} — ${msg.section}` : `${msg.section}`;
+      document.getElementById('progressLabel').textContent = label;
+      document.getElementById('progressText').textContent = msg.progress + '%';
+      document.getElementById('progressDetail').textContent = `Step ${msg.step} of ${msg.totalSteps}`;
+      document.getElementById('progressBar').style.width = msg.progress + '%';
+
+      // Mark chip as active
+      if (msg.lessonNum > 0) {
+        const chip = document.querySelector(`#chip-${msg.lessonNum}-${getChipKey(msg.section)}`);
+        if (chip) chip.className = 'section-chip active';
+      } else {
+        const chip = document.querySelector(`#chip-0-${getChipKey(msg.section)}`);
+        if (chip) chip.className = 'section-chip active';
+      }
+
+      // Clear token buffer for this section
+      tokenBuffer = '';
+      if (tokenEl) tokenEl.textContent = '';
+    }
+
+    if (msg.type === 'token') {
+      tokenBuffer += msg.chunk;
+      if (showStream && tokenEl) {
+        tokenEl.textContent = tokenBuffer;
+        tokenEl.scrollTop = tokenEl.scrollHeight;
+      }
+    }
+
+    if (msg.type === 'validation_warning') {
+      show(logContainer);
+      const item = document.createElement('div');
+      item.className = 'validation-warning-item';
+      item.innerHTML = `⚠️ <strong>Lesson ${msg.lessonNum} - ${msg.section}</strong> failed audit on attempt ${msg.attempt}. <em>Feedback:</em> ${msg.feedback}`;
+      logItems.appendChild(item);
+      logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    if (msg.type === 'image_start') {
+      document.getElementById('progressLabel').textContent = `Lesson ${msg.lessonNum} — Generating graphics assets...`;
+    }
+
+    if (msg.type === 'image_done') {
+      console.log('Image asset completed:', msg.imagePath);
+    }
+
+    if (msg.type === 'section_done') {
+      const chipId = msg.lessonNum > 0 ? `#chip-${msg.lessonNum}-${msg.section}` : `#chip-0-${msg.section}`;
+      const chip = document.querySelector(chipId);
+      if (chip) chip.className = 'section-chip done';
+    }
+
+    if (msg.type === 'section_error') {
+      const chipId = msg.lessonNum > 0 ? `#chip-${msg.lessonNum}-${msg.section}` : `#chip-0-${msg.section}`;
+      const chip = document.querySelector(chipId);
+      if (chip) chip.className = 'section-chip error';
+    }
+
+    if (msg.type === 'lesson_done') {
+      const header = document.querySelector(`#lesson-block-${msg.lessonNum} .lesson-progress-header span:first-child`);
+      if (header) header.textContent = '✅';
+    }
+
+    if (msg.type === 'all_done') {
+      document.getElementById('progressBar').style.width = '100%';
+      document.getElementById('progressText').textContent = '100%';
+      document.getElementById('progressLabel').textContent = 'Complete!';
+      document.getElementById('badge3').className = 'step-badge done';
+      document.getElementById('badge3').textContent = '✓';
+
+      document.getElementById('downloadSummary').textContent =
+        `${structure.lessons.length} lessons generated for Chapter ${structure.chapter.number}: ${structure.chapter.title}.`;
+
+      // Load previews
+      await loadPreviews();
+      
+      show('step4Card');
+      document.getElementById('step4Card').scrollIntoView({ behavior: 'smooth' });
+      evtSource.close();
+    }
+
+    if (msg.type === 'error') {
+      showError('Generation error: ' + msg.error);
+      evtSource.close();
+    }
+  };
+
+  evtSource.onerror = () => {
+    showError('Lost connection to server. Please refresh and try again.');
+    evtSource.close();
+  };
+}
+
+function getChipKey(label) {
+  const map = {
+    'Warm-Up':            'warmUp',
+    'Concept Building':   'conceptBuilding',
+    'Worked Examples':    'examples',
+    'Pop-Up Quiz':        'popUpQuiz',
+    'Mental Maths':       'mentalMaths',
+    'Practice Questions': 'practiceQuestions',
+    'Key Takeaways':      'keyTakeaways',
+    'Video Script':       'videoScript',
+    'Unit Assessment':    'unitAssessment',
+  };
+  return map[label] || label;
+}
+
+// ── Step 4: Preview Loading & Tabs ─────────────────────────────────
+async function loadPreviews() {
+  try {
+    const res = await fetch('/api/preview');
+    const data = await res.json();
+    
+    // 1. Lessons preview
+    let lessonHtml = '';
+    data.structure.lessons.forEach((l, idx) => {
+      lessonHtml += `<h2>Lesson ${l.number}: ${l.title}</h2>\n`;
+      const sects = data.sections[idx] || {};
+      for (const [key, text] of Object.entries(sects)) {
+        lessonHtml += `<h3>${key}</h3>\n${text}\n\n`;
+      }
+      lessonHtml += `---\n\n`;
+    });
+    document.getElementById('lessonPreviewContent').textContent = lessonHtml;
+
+    // 2. Slides outline
+    let slidesHtml = '';
+    data.structure.lessons.forEach((l, idx) => {
+      slidesHtml += `Lesson ${l.number}: ${l.title} Presentation Slides:\n`;
+      const imgInfo = data.images[idx] ? `[Image assets: ${JSON.stringify(data.images[idx])}]` : '';
+      slidesHtml += `${imgInfo}\n\n`;
+      const sects = data.sections[idx] || {};
+      for (const [key, text] of Object.entries(sects)) {
+        slidesHtml += `Slide Section: ${key}\n${text.slice(0, 400)}...\n\n`;
+      }
+    });
+    document.getElementById('slidesPreviewContent').textContent = slidesHtml;
+
+    // 3. Video scripts
+    let scriptsText = '';
+    data.structure.lessons.forEach((l, idx) => {
+      scriptsText += `Lesson ${l.number}: ${l.title} Script:\n`;
+      scriptsText += `${data.videoScripts[idx] || 'N/A'}\n\n`;
+      scriptsText += `---\n\n`;
+    });
+    document.getElementById('scriptPreviewContent').textContent = scriptsText;
+
+    // 4. Unit assessment
+    document.getElementById('unitPreviewContent').textContent = data.unitAssessment || 'N/A';
+
+    // 5. Reports & RAG Ingestion logs
+    let logsHtml = '<h4>Self-Correction Retries Log</h4><ul>';
+    data.structure.lessons.forEach((l, idx) => {
+      const reports = data.validationReport[idx] || {};
+      for (const [sec, rep] of Object.entries(reports)) {
+        if (rep.attempts > 1 || !rep.ok) {
+          logsHtml += `<li><strong>Lesson ${l.number} ${sec}:</strong> ${rep.attempts} generation attempts. Checked = ${rep.ok}. Errors: ${JSON.stringify(rep.errors)}</li>`;
+        }
+      }
+    });
+    logsHtml += '</ul><h4 style="margin-top:16px;">Vector DB / RAG Ingest Sources</h4>';
+    if (data.validationReport && data.validationReport.citations) {
+      logsHtml += '<ul>';
+      data.validationReport.citations.forEach(c => {
+        logsHtml += `<li>Source: <em>${c.source}</em>, page ${c.page} (Inferred Grade ${c.grade})</li>`;
+      });
+      logsHtml += '</ul>';
+    } else {
+      logsHtml += '<p>Citations logged in final download package manifest.json</p>';
+    }
+    
+    document.getElementById('reportPreviewContent').innerHTML = logsHtml;
+
+  } catch (err) {
+    console.error('Failed to load previews:', err);
+  }
+}
+
+function switchTab(tabId) {
+  // Hide all contents
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  // Deactivate all buttons
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+
+  // Show selected content
+  document.getElementById(tabId).classList.add('active');
+  // Highlight active button
+  event.target.classList.add('active');
+}
+
+function downloadBundle() {
+  window.location.href = '/api/download';
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+function toggleStream() {
+  showStream = !showStream;
+  const el = document.getElementById('tokenStream');
+  const btn = document.getElementById('toggleStreamBtn');
+  if (showStream) {
+    show(el);
+    btn.textContent = '🙈 Hide Live Output';
+    el.textContent = tokenBuffer;
+    el.scrollTop = el.scrollHeight;
+  } else {
+    hide(el);
+    btn.textContent = '👁 Show Live Output';
+  }
+}
+
+function setLoading(btnId, loading, text) {
+  const btn = document.getElementById(btnId);
+  btn.disabled = loading;
+  btn.innerHTML = loading
+    ? `<span class="spinner"></span> <span>${text}</span>`
+    : `<span>${text}</span>`;
+}
+
+function show(el) {
+  const e = typeof el === 'string' ? document.getElementById(el) : el;
+  if (e) e.classList.remove('hidden');
+}
+function hide(el) {
+  const e = typeof el === 'string' ? document.getElementById(el) : el;
+  if (e) e.classList.add('hidden');
+}
+
+function showError(msg) {
+  const box = document.getElementById('errorBox');
+  const txt = document.getElementById('errorMsg');
+  txt.innerHTML = '❌ ' + msg;
+  box.classList.remove('hidden');
+  box.scrollIntoView({ behavior: 'smooth' });
+}
+function clearError() {
+  document.getElementById('errorBox').classList.add('hidden');
+}
+
+async function resetAll() {
+  await fetch('/api/reset', { method: 'POST' });
+  structure = null;
+  lessonChips = {};
+  tokenBuffer = '';
+  hide('step2Card');
+  hide('step3Card');
+  hide('step4Card');
+  hide('structureLoading');
+  clearError();
+  document.getElementById('badge1').className = 'step-badge active';
+  document.getElementById('badge1').textContent = '1';
+  document.getElementById('badge2').className = 'step-badge';
+  document.getElementById('badge2').textContent = '2';
+  document.getElementById('badge3').className = 'step-badge';
+  document.getElementById('badge3').textContent = '3';
+  document.getElementById('progressTrack').innerHTML = '';
+  document.getElementById('validationLogItems').innerHTML = '';
+  hide('validationLog');
+  setLoading('generateStructureBtn', false, '✨ Generate Chapter Structure');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function loadExample() {
+  document.getElementById('slosInput').value = `M-04-A-19: Differentiate among proper fractions, improper fractions and mixed numbers.
+M-04-A-20: Convert improper fractions to mixed numbers and vice versa.
+M-04-A-21: Compare and order unlike fractions.`;
+  document.getElementById('gradeSelect').value = '4';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# Dependency directories
+node_modules/
+
+# Local Vector Database
+chroma_db/
+
+# Temporary generated assets
+public/images_temp/
+test_output.pptx
+test_output.pdf
+
+# Logs and environment
+*.log
+.env
+
+# OS Metadata
+.DS_Store
+Thumbs.db
