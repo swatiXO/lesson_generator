@@ -4,6 +4,9 @@ const {
   Document, Packer, Paragraph, TextRun,
   Header, Footer, AlignmentType, LevelFormat, HeadingLevel,
   BorderStyle, PageNumber, PageBreak,
+  Table, TableRow, TableCell, WidthType,
+  Math: DocxMath, MathRun, MathFraction, MathSuperScript, MathSubScript,
+  MathSubSuperScript, MathRadical, MathRoundBrackets,
 } = docx;
 
 const C = {
@@ -87,6 +90,204 @@ function numPara(text) {
   });
 }
 
+// ─── Math (equation) rendering ─────────────────────────────────────
+// Converts a subset of LaTeX into docx OMML Math components.
+// Supports: \frac{a}{b}, ^x / ^{xy} (superscript), _x / _{xy} (subscript),
+// \sqrt{x} / \sqrt[n]{x}, ( ) grouping, and common symbols
+// (\times \div \pm \mp \cdot \leq \geq \neq \approx \infty \pi \alpha \beta
+//  \gamma \theta \Delta \degree).
+const MATH_SYMBOLS = {
+  '\\times':   '×',
+  '\\div':     '÷',
+  '\\pm':      '±',
+  '\\mp':      '∓',
+  '\\cdot':    '·',
+  '\\leq':     '≤',
+  '\\geq':     '≥',
+  '\\neq':     '≠',
+  '\\approx':  '≈',
+  '\\infty':   '∞',
+  '\\pi':      'π',
+  '\\alpha':   'α',
+  '\\beta':    'β',
+  '\\gamma':   'γ',
+  '\\theta':   'θ',
+  '\\Delta':   'Δ',
+  '\\degree':  '°',
+  '\\%':       '%',
+  '\\ ':       ' ',
+};
+
+function tokenizeLatex(src) {
+  const tokens = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (/\s/.test(ch)) { i++; continue; }
+    if (ch === '{') { tokens.push({ t: 'LBRACE' }); i++; continue; }
+    if (ch === '}') { tokens.push({ t: 'RBRACE' }); i++; continue; }
+    if (ch === '[') { tokens.push({ t: 'LBRACKET' }); i++; continue; }
+    if (ch === ']') { tokens.push({ t: 'RBRACKET' }); i++; continue; }
+    if (ch === '^') { tokens.push({ t: 'CARET' }); i++; continue; }
+    if (ch === '_') { tokens.push({ t: 'UNDERSCORE' }); i++; continue; }
+    if (ch === '\\') {
+      // Command: \frac, \sqrt, \times, etc.
+      let j = i + 1;
+      if (j < src.length && !/[a-zA-Z]/.test(src[j])) {
+        // Escaped symbol like \% or \ (space)
+        tokens.push({ t: 'CMD', name: '\\' + src[j] });
+        i = j + 1;
+        continue;
+      }
+      while (j < src.length && /[a-zA-Z]/.test(src[j])) j++;
+      tokens.push({ t: 'CMD', name: src.slice(i, j) });
+      i = j;
+      continue;
+    }
+    // Plain character — accumulate a run of non-special chars
+    let j = i;
+    while (j < src.length && !/[{}\[\]^_\\\s]/.test(src[j])) j++;
+    if (j === i) j = i + 1; // safety
+    tokens.push({ t: 'CHAR', value: src.slice(i, j) });
+    i = j;
+  }
+  return tokens;
+}
+
+function parseLatexToMathChildren(src) {
+  const tokens = tokenizeLatex(src);
+  let pos = 0;
+
+  function peek() { return tokens[pos]; }
+  function next() { return tokens[pos++]; }
+
+  // Parses a single braced group {...} and returns its inner MathComponent[]
+  function parseGroup() {
+    if (peek() && peek().t === 'LBRACE') {
+      next(); // consume {
+      const children = parseExpression(['RBRACE']);
+      if (peek() && peek().t === 'RBRACE') next();
+      return children;
+    }
+    // Not braced — take just the next atom (single char or command)
+    return parseSingleAtom();
+  }
+
+  function parseBracketGroup() {
+    if (peek() && peek().t === 'LBRACKET') {
+      next();
+      const children = parseExpression(['RBRACKET']);
+      if (peek() && peek().t === 'RBRACKET') next();
+      return children;
+    }
+    return null;
+  }
+
+  // Parses exactly one atom (char/command run), no postfix scripts
+  function parseSingleAtom() {
+    const tok = next();
+    if (!tok) return [];
+    if (tok.t === 'CHAR') return [new MathRun(tok.value)];
+    if (tok.t === 'CMD') return [new MathRun(MATH_SYMBOLS[tok.name] || tok.name.replace('\\', ''))];
+    return [];
+  }
+
+  // Parses one "base" element (possibly a command with arguments like \frac{}{} or \sqrt{}),
+  // then applies any trailing ^ / _ scripts.
+  function parseBaseWithScripts() {
+    const tok = peek();
+    let base;
+
+    if (tok && tok.t === 'CMD' && tok.name === '\\frac') {
+      next();
+      const num = parseGroup();
+      const den = parseGroup();
+      base = [new MathFraction({ numerator: num, denominator: den })];
+    } else if (tok && tok.t === 'CMD' && tok.name === '\\sqrt') {
+      next();
+      const degree = parseBracketGroup(); // optional [n]
+      const radicand = parseGroup();
+      base = [new MathRadical(degree ? { children: radicand, degree } : { children: radicand })];
+    } else if (tok && tok.t === 'LBRACE') {
+      base = parseGroup();
+    } else if (tok && tok.t === 'CHAR' && tok.value === '(') {
+      next();
+      const inner = parseExpression(['CHAR_)']);
+      base = [new MathRoundBrackets({ children: inner })];
+    } else {
+      base = parseSingleAtom();
+    }
+
+    // Check for postfix ^ and/or _
+    let sup = null, sub = null;
+    while (peek() && (peek().t === 'CARET' || peek().t === 'UNDERSCORE')) {
+      const scriptTok = next();
+      const scriptChildren = parseGroup();
+      if (scriptTok.t === 'CARET') sup = scriptChildren;
+      else sub = scriptChildren;
+    }
+
+    if (sup && sub) return [new MathSubSuperScript({ children: base, subScript: sub, superScript: sup })];
+    if (sup) return [new MathSuperScript({ children: base, superScript: sup })];
+    if (sub) return [new MathSubScript({ children: base, subScript: sub })];
+    return base;
+  }
+
+  // Parses a sequence of atoms until a stop condition is hit.
+  function parseExpression(stopTokens = []) {
+    const result = [];
+    while (peek()) {
+      const tok = peek();
+      if (tok.t === 'RBRACE' || tok.t === 'RBRACKET') break;
+      if (tok.t === 'CHAR' && tok.value === ')' && stopTokens.includes('CHAR_)')) {
+        next();
+        break;
+      }
+      result.push(...parseBaseWithScripts());
+    }
+    return result;
+  }
+
+  return parseExpression();
+}
+
+// Splits a line of text into an array of docx run-like children (TextRun for
+// plain text, Math for $...$ segments), for use inside a single Paragraph.
+function parseInlineMath(line) {
+  const parts = [];
+  const regex = /\$([^$]+)\$/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(line)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(run(line.slice(lastIndex, match.index)));
+    }
+    try {
+      const mathChildren = parseLatexToMathChildren(match[1]);
+      if (mathChildren.length) {
+        parts.push(new DocxMath({ children: mathChildren }));
+      } else {
+        parts.push(run(match[1])); // fallback: render raw if parse produced nothing
+      }
+    } catch (err) {
+      parts.push(run(match[1])); // fallback on any parse error — never break the whole doc
+    }
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < line.length) {
+    parts.push(run(line.slice(lastIndex)));
+  }
+
+  if (parts.length === 0) parts.push(run(line));
+  return parts;
+}
+
+function hasInlineMath(line) {
+  return /\$[^$]+\$/.test(line);
+}
+
 // ─── Text parser ─────────────────────────────────────────────────
 // Converts raw LLM text into docx paragraphs by analysing line patterns
 function parseTextToParas(rawText) {
@@ -96,6 +297,77 @@ function parseTextToParas(rawText) {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) { paras.push(gap(80)); continue; }
+
+    // Display/block equations: $$ ... $$ (own centered paragraph)
+    if (line.startsWith('$$') && line.endsWith('$$') && line.length > 4) {
+      const latex = line.slice(2, -2).trim();
+      try {
+        const mathChildren = parseLatexToMathChildren(latex);
+        paras.push(new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 120, after: 120 },
+          children: [new DocxMath({ children: mathChildren })],
+        }));
+      } catch (err) {
+        paras.push(para(latex));
+      }
+      continue;
+    }
+
+    // Parse markdown tables
+    if (line.startsWith('|')) {
+      const tableLines = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        tableLines.push(lines[i].trim());
+        i++;
+      }
+      i--; // adjust index because loop will increment it
+
+      const rows = [];
+      tableLines.forEach((tLine, rIdx) => {
+        let cellsText = tLine.split('|').map(c => c.trim());
+        // Remove empty cells at margins
+        if (cellsText[0] === '') cellsText.shift();
+        if (cellsText[cellsText.length - 1] === '') cellsText.pop();
+
+        // Skip separator row (e.g. |---|---|)
+        const isSeparator = cellsText.every(c => /^:-*:?$/.test(c) || c.startsWith('-'));
+        if (isSeparator) return;
+
+        const cells = cellsText.map(cellTxt => {
+          let isBold = false;
+          let cleanText = cellTxt;
+          if (cellTxt.startsWith('**') && cellTxt.endsWith('**')) {
+            isBold = true;
+            cleanText = cellTxt.slice(2, -2);
+          } else if (rIdx === 0) {
+            isBold = true; // Bold header row
+          }
+
+          const cellChildren = hasInlineMath(cleanText)
+            ? parseInlineMath(cleanText)
+            : [new TextRun({ text: cleanText, font: "Arial", size: 20, bold: isBold })];
+
+          return new TableCell({
+            width: { size: 100 / cellsText.length, type: WidthType.PERCENTAGE },
+            margins: { top: 100, bottom: 100, left: 150, right: 150 },
+            shading: rIdx === 0 ? { fill: "F2F2F2" } : undefined,
+            children: [ new Paragraph({ children: cellChildren }) ]
+          });
+        });
+
+        rows.push(new TableRow({ cells }));
+      });
+
+      if (rows.length > 0) {
+        const table = new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          rows: rows
+        });
+        paras.push(table);
+      }
+      continue;
+    }
 
     // Headings
     if (line.startsWith('#### ')) { paras.push(h4(line.slice(5))); continue; }
@@ -114,29 +386,54 @@ function parseTextToParas(rawText) {
 
     // Bold label lines like "**Example 1**" or "Example 1:" or "Step 1:"
     if (/^\*\*(.+)\*\*$/.test(line)) {
+      const inner = line.replace(/\*\*/g, '');
+      const children = hasInlineMath(inner)
+        ? parseInlineMath(inner)
+        : [run(inner, { bold: true })];
       paras.push(new Paragraph({
         spacing: { before: 120, after: 60 },
-        children: [run(line.replace(/\*\*/g, ''), { bold: true })],
+        children,
       }));
       continue;
     }
     if (/^(Example|Step|Part [A-C]|Answer:|Working:)\b/.test(line)) {
+      const children = hasInlineMath(line)
+        ? parseInlineMath(line)
+        : [run(line, { bold: true })];
       paras.push(new Paragraph({
         spacing: { before: 100, after: 60 },
-        children: [run(line, { bold: true })],
+        children,
       }));
       continue;
     }
 
     // Numbered list items: "1." "2." "1)" "2)"
     if (/^\d+[\.\)]\s/.test(line)) {
-      paras.push(numPara(line.replace(/^\d+[\.\)]\s/, '')));
+      const inner = line.replace(/^\d+[\.\)]\s/, '');
+      if (hasInlineMath(inner)) {
+        paras.push(new Paragraph({
+          numbering: { reference: "numbers", level: 0 },
+          spacing: { before: 60, after: 60 },
+          children: parseInlineMath(inner),
+        }));
+      } else {
+        paras.push(numPara(inner));
+      }
       continue;
     }
 
     // Bullet items: "- " "• " "* "
     if (/^[-•*]\s/.test(line)) {
-      paras.push(bulletPara(line.replace(/^[-•*]\s/, '')));
+      const inner = line.replace(/^[-•*]\s/, '');
+      if (hasInlineMath(inner)) {
+        paras.push(new Paragraph({
+          numbering: { reference: "bullets", level: 0 },
+          spacing: { before: 60, after: 60 },
+          children: parseInlineMath(inner),
+        }));
+      } else {
+        paras.push(bulletPara(inner));
+      }
       continue;
     }
 
@@ -145,7 +442,7 @@ function parseTextToParas(rawText) {
       paras.push(new Paragraph({
         spacing: { before: 40, after: 40 },
         indent: { left: 480 },
-        children: [run(line)],
+        children: hasInlineMath(line) ? parseInlineMath(line) : [run(line)],
       }));
       continue;
     }
@@ -155,13 +452,17 @@ function parseTextToParas(rawText) {
       paras.push(new Paragraph({
         spacing: { before: 40, after: 40 },
         indent: { left: 480 },
-        children: [run(line)],
+        children: hasInlineMath(line) ? parseInlineMath(line) : [run(line)],
       }));
       continue;
     }
 
     // Normal paragraph
-    paras.push(para(line));
+    if (hasInlineMath(line)) {
+      paras.push(new Paragraph({ spacing: { before: 80, after: 80 }, children: parseInlineMath(line) }));
+    } else {
+      paras.push(para(line));
+    }
   }
 
   return paras;
@@ -224,6 +525,7 @@ async function buildDocx(structure, generatedSections) {
 
     // Each section in order
     const sectionOrder = [
+      { key: "introduction",     label: "Introduction"       },
       { key: "warmUp",           label: "Warm-Up"            },
       { key: "conceptBuilding",  label: "Concept Building"   },
       { key: "examples",         label: "Worked Examples"    },

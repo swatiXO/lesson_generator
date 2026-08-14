@@ -12,23 +12,77 @@
     --blue:       #1F5C99;
     --lightblue:  #2E75B6;
     --accent:     #E8F4FD;
-    --grey:       #6C757D;
+    --grey:       #5A6570;
     --lightgrey:  #F8F9FA;
     --border:     #DEE2E6;
-    --text:       #212529;
-    --success:    #198754;
-    --warning:    #856404;
-    --danger:     #DC3545;
+    --text:       #1B1F23;
+    --success:    #146C43;
+    --warning:    #6B4E00;
+    --danger:     #B02A37;
     --purple:     #5B2C8D;
     --darkbg:     #0D1B2A;
+    --focus-ring: #0B5FFF;
   }
 
+  html { scroll-behavior: smooth; }
+
   body {
-    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
     background: #F0F4F8;
     color: var(--text);
     min-height: 100vh;
     padding-bottom: 60px;
+    line-height: 1.5;
+  }
+
+  /* ── Accessibility helpers ── */
+  .visually-hidden {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .skip-link {
+    position: absolute;
+    left: 0; top: -48px;
+    background: var(--blue);
+    color: white;
+    padding: 12px 20px;
+    z-index: 1000;
+    border-radius: 0 0 8px 0;
+    font-weight: 600;
+    font-size: 14px;
+    transition: top 0.15s;
+  }
+  .skip-link:focus { top: 0; }
+
+  :focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  /* Custom-styled controls need their own visible focus treatment */
+  .btn:focus-visible,
+  .tab-btn:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  input:focus-visible {
+    outline: 3px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 
   /* ── Header ── */
@@ -40,9 +94,10 @@
     align-items: center;
     gap: 16px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    flex-wrap: wrap;
   }
   header h1 { font-size: 22px; font-weight: 700; }
-  header span { font-size: 13px; opacity: 0.9; margin-left: auto; }
+  header .tagline { font-size: 13px; opacity: 0.9; margin-left: auto; }
 
   .model-badge {
     background: rgba(255,255,255,0.15);
@@ -53,8 +108,8 @@
     letter-spacing: 0.5px;
     box-shadow: inset 0 1px 3px rgba(0,0,0,0.2);
   }
-  .model-badge.ok  { background: rgba(25,135,84,0.45); border: 1px solid rgba(25,135,84,0.5); }
-  .model-badge.err { background: rgba(220,53,69,0.45); border: 1px solid rgba(220,53,69,0.5); }
+  .model-badge.ok  { background: #146C43; border: 1px solid #0f5133; }
+  .model-badge.err { background: #B02A37; border: 1px solid #8c222c; }
 
   /* ── Layout ── */
   main {
@@ -70,10 +125,9 @@
   .card {
     background: white;
     border-radius: 12px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
     overflow: hidden;
     border: 1px solid var(--border);
-    transition: transform 0.2s, box-shadow 0.2s;
   }
   .card-header {
     display: flex;
@@ -82,6 +136,7 @@
     padding: 18px 24px;
     background: var(--lightgrey);
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
   }
   .step-badge {
     width: 32px; height: 32px;
@@ -100,6 +155,7 @@
 
   /* ── Form inputs ── */
   label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--grey); }
+  .hint { font-size: 12px; color: var(--grey); margin-top: 4px; }
   textarea {
     width: 100%;
     min-height: 180px;
@@ -108,13 +164,14 @@
     padding: 12px 14px;
     font-size: 14px;
     font-family: inherit;
+    color: var(--text);
     resize: vertical;
     transition: border-color 0.15s;
   }
   textarea:focus { outline: none; border-color: var(--blue); }
 
-  .row { display: flex; gap: 16px; align-items: flex-end; }
-  .row .field { flex: 1; }
+  .row { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+  .row .field { flex: 1; min-width: 160px; }
 
   select {
     width: 100%;
@@ -123,6 +180,7 @@
     border-radius: 8px;
     font-size: 14px;
     font-family: inherit;
+    color: var(--text);
     background: white;
   }
   select:focus { outline: none; border-color: var(--blue); }
@@ -130,13 +188,19 @@
   /* ── Toggle switch ── */
   .switch-container {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
     background: #E8F4FD;
     padding: 12px 16px;
     border-radius: 8px;
     border: 1px solid #B8D8F0;
     margin-bottom: 16px;
+  }
+  .switch-container input[type="checkbox"] {
+    width: 18px; height: 18px;
+    margin-top: 2px;
+    accent-color: var(--blue);
+    flex-shrink: 0;
   }
   .switch-container label {
     margin-bottom: 0;
@@ -153,18 +217,19 @@
     font-size: 14px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: background-color 0.15s, transform 0.1s;
     display: inline-flex;
     align-items: center;
     gap: 8px;
   }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
   .btn-primary  { background: var(--blue);    color: white; }
   .btn-primary:hover:not(:disabled)  { background: #174a80; }
   .btn-success  { background: var(--success); color: white; }
-  .btn-success:hover:not(:disabled)  { background: #146c43; }
+  .btn-success:hover:not(:disabled)  { background: #0f5133; }
   .btn-danger   { background: var(--danger);  color: white; }
-  .btn-danger:hover:not(:disabled)   { background: #b02a37; }
+  .btn-danger:hover:not(:disabled)   { background: #8c222c; }
   .btn-outline  { background: white; color: var(--blue); border: 1.5px solid var(--blue); }
   .btn-outline:hover:not(:disabled)  { background: var(--accent); }
   .btn-download { background: var(--green);   color: white; font-size: 16px; padding: 14px 32px; box-shadow: 0 4px 12px rgba(26,122,74,0.3); }
@@ -227,6 +292,8 @@
     color: var(--grey);
     display: flex;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .progress-label strong { color: var(--text); }
 
@@ -244,6 +311,7 @@
     border-bottom: 1px solid var(--border);
     font-size: 14px;
     font-weight: 600;
+    flex-wrap: wrap;
   }
   .section-chips {
     display: flex;
@@ -259,8 +327,12 @@
     border: 1.5px solid var(--border);
     background: white;
     color: var(--grey);
-    transition: all 0.2s;
+    transition: border-color 0.2s, background-color 0.2s, color 0.2s;
   }
+  /* Status is conveyed by icon + text, not color alone */
+  .section-chip.active::before { content: "⏳ "; }
+  .section-chip.done::before   { content: "✅ "; }
+  .section-chip.error::before  { content: "⚠️ "; }
   .section-chip.active  { border-color: var(--blue);    background: var(--accent);   color: var(--blue);    }
   .section-chip.done    { border-color: var(--success);  background: #D1E7DD;          color: var(--success); }
   .section-chip.error   { border-color: var(--danger);   background: #F8D7DA;          color: var(--danger);  }
@@ -268,7 +340,7 @@
   /* ── Live token stream ── */
   .token-stream {
     background: var(--darkbg);
-    color: #00FF88;
+    color: #4BE38A;
     padding: 14px 18px;
     border-radius: 8px;
     font-family: 'Courier New', monospace;
@@ -294,9 +366,9 @@
   }
   .validation-warning-item {
     font-size: 12px;
-    color: #856404;
+    color: var(--warning);
     margin-bottom: 6px;
-    border-bottom: 1px dashed rgba(133,100,4,0.2);
+    border-bottom: 1px dashed rgba(107,78,0,0.2);
     padding-bottom: 4px;
   }
 
@@ -339,11 +411,12 @@
     color: var(--grey);
     border-bottom: 3px solid transparent;
     white-space: nowrap;
-    transition: all 0.2s;
+    transition: color 0.2s, background-color 0.2s;
   }
-  .tab-btn:hover { color: var(--blue); background: rgba(31,92,153,0.05); }
+  .tab-btn:hover { color: var(--blue); background: rgba(31,92,153,0.06); }
   .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); background: white; }
-  
+  .tab-btn[aria-selected="true"] { color: var(--blue); border-bottom-color: var(--blue); background: white; }
+
   .tab-content {
     padding: 24px;
     display: none;
@@ -353,7 +426,7 @@
   .tab-content.active { display: block; }
   .tab-content h3 { font-size: 18px; margin-bottom: 12px; color: var(--blue); }
   .tab-content p { font-size: 14px; margin-bottom: 12px; line-height: 1.6; }
-  
+
   /* ── Download section ── */
   .download-section {
     text-align: center;
@@ -387,35 +460,47 @@
   }
   .overview-box h3 { font-size: 16px; font-weight: 700; color: var(--blue); margin-bottom: 6px; }
   .overview-box p  { font-size: 14px; color: var(--text); line-height: 1.6; }
+
+  footer {
+    max-width: 1024px;
+    margin: 0 auto;
+    padding: 0 24px;
+    font-size: 12px;
+    color: var(--grey);
+    text-align: center;
+  }
 </style>
 </head>
 <body>
 
+<a class="skip-link" href="#main-content">Skip to main content</a>
+
 <header>
-  <div style="font-size:24px">📚</div>
+  <div style="font-size:24px" aria-hidden="true">📚</div>
   <h1>Automated Lesson & Courseware Generation System</h1>
-  <div class="model-badge" id="modelBadge">Checking model...</div>
-  <span>qwen2.5:14b + Tesseract + RAG</span>
+  <div class="model-badge" id="modelBadge" role="status" aria-live="polite">Checking model...</div>
+  <span class="tagline">RAG-grounded content generation</span>
 </header>
 
-<main>
+<main id="main-content">
 
   <!-- ── STEP 1: Input ── -->
   <div class="card" id="step1Card">
     <div class="card-header">
-      <div class="step-badge active" id="badge1">1</div>
+      <div class="step-badge active" id="badge1" aria-hidden="true">1</div>
       <h2>Enter SLOs and Configuration</h2>
       <span class="sub">Specify parameters and learning outcomes</span>
     </div>
     <div class="card-body">
 
       <div class="alert alert-info">
-        💡 Ground facts in curriculum textbooks automatically. The system will retrieve relevant context for math SLOs.
+        <span aria-hidden="true">💡</span>
+        <span>Ground facts in curriculum textbooks automatically. The system will retrieve relevant context for math SLOs.</span>
       </div>
 
       <div class="row" style="margin-bottom:16px">
         <div class="field">
-          <label>Grade</label>
+          <label for="gradeSelect">Grade</label>
           <select id="gradeSelect">
             <option value="3">Grade 3</option>
             <option value="4" selected>Grade 4</option>
@@ -424,7 +509,7 @@
           </select>
         </div>
         <div class="field">
-          <label>Subject</label>
+          <label for="subjectSelect">Subject</label>
           <select id="subjectSelect">
             <option value="Mathematics" selected>Mathematics</option>
             <option value="Science">Science</option>
@@ -438,23 +523,24 @@
         <label for="disableVerificationCheck"><strong>Disable AI Vision Image Verification</strong> (Speeds up generation, accepts searched images directly without LLM confirmation)</label>
       </div>
 
-      <label>Student Learning Outcomes (SLOs)</label>
-      <textarea id="slosInput" placeholder="Paste your SLOs here. Example:
+      <label for="slosInput">Student Learning Outcomes (SLOs)</label>
+      <textarea id="slosInput" aria-describedby="slosHint" placeholder="Paste your SLOs here. Example:
 
 M-04-A-19: Differentiate among proper fractions, improper fractions and mixed numbers.
 M-04-A-20: Convert improper fractions to mixed numbers and vice versa.
 M-04-A-21: Compare and order unlike fractions."></textarea>
+      <p class="hint" id="slosHint">One SLO per line. Include the code and description for best results.</p>
 
       <div class="btn-row">
-        <button class="btn btn-primary" id="generateStructureBtn" onclick="generateStructure()">
-          <span>✨ Generate Chapter Structure</span>
+        <button type="button" class="btn btn-primary" id="generateStructureBtn" onclick="generateStructure()">
+          <span aria-hidden="true">✨</span> <span>Generate Chapter Structure</span>
         </button>
-        <button class="btn btn-outline" onclick="loadExample()">Load Example SLOs</button>
+        <button type="button" class="btn btn-outline" onclick="loadExample()">Load Example SLOs</button>
       </div>
 
-      <div id="structureLoading" class="hidden" style="margin-top:16px">
+      <div id="structureLoading" class="hidden" style="margin-top:16px" role="status" aria-live="polite">
         <div class="alert alert-info">
-          <div class="spinner" style="border-color:rgba(31,92,153,0.3); border-top-color:var(--blue)"></div>
+          <div class="spinner" style="border-color:rgba(31,92,153,0.3); border-top-color:var(--blue)" aria-hidden="true"></div>
           <span>Planning chapter structure... This may take 20–45 seconds.</span>
         </div>
       </div>
@@ -465,7 +551,7 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
   <!-- ── STEP 2: Review Structure ── -->
   <div class="card hidden" id="step2Card">
     <div class="card-header">
-      <div class="step-badge" id="badge2">2</div>
+      <div class="step-badge" id="badge2" aria-hidden="true">2</div>
       <h2>Review Chapter Structure</h2>
       <span class="sub">Verify lessons before initiating content generation</span>
     </div>
@@ -475,10 +561,12 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
       <div id="structureGrid" class="structure-grid"></div>
 
       <div class="btn-row" style="margin-top:20px">
-        <button class="btn btn-success" id="startGenBtn" onclick="startGeneration()">
-          ✅ Looks Good — Generate All Courseware
+        <button type="button" class="btn btn-success" id="startGenBtn" onclick="startGeneration()">
+          <span aria-hidden="true">✅</span> Looks Good — Generate All Courseware
         </button>
-        <button class="btn btn-outline" onclick="resetAll()">↩ Start Over</button>
+        <button type="button" class="btn btn-outline" onclick="resetAll()">
+          <span aria-hidden="true">↩</span> Start Over
+        </button>
       </div>
 
     </div>
@@ -487,9 +575,9 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
   <!-- ── STEP 3: Generation Progress ── -->
   <div class="card hidden" id="step3Card">
     <div class="card-header">
-      <div class="step-badge" id="badge3">3</div>
+      <div class="step-badge" id="badge3" aria-hidden="true">3</div>
       <h2>Generating Content & Media Assets</h2>
-      <span class="sub" id="progressLabel">Initializing generation loop...</span>
+      <span class="sub" id="progressLabel" role="status" aria-live="polite">Initializing generation loop...</span>
     </div>
     <div class="card-body">
 
@@ -497,23 +585,26 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
         <div class="progress-label">
           <strong id="progressText">0%</strong>
           <span id="progressDetail">—</span>
+          <span id="progressEta" style="font-weight: 600; color: var(--blue);">ETA: Calculating...</span>
         </div>
-        <div class="progress-bar-wrap" style="margin-top:8px">
+        <div class="progress-bar-wrap" style="margin-top:8px" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" aria-label="Overall generation progress" id="progressBarWrap">
           <div class="progress-bar" id="progressBar" style="width:0%"></div>
         </div>
       </div>
 
       <div class="progress-track" id="progressTrack"></div>
 
-      <div class="token-stream hidden" id="tokenStream"></div>
+      <div class="token-stream hidden" id="tokenStream" aria-live="off" aria-label="Live model output"></div>
 
-      <div class="validation-log hidden" id="validationLog">
+      <div class="validation-log hidden" id="validationLog" role="log" aria-live="polite">
         <strong>⚠️ Self-Correction Logs:</strong>
         <div id="validationLogItems"></div>
       </div>
 
       <div class="btn-row" style="margin-top:16px">
-        <button class="btn btn-outline" id="toggleStreamBtn" onclick="toggleStream()">👁 Show Live Content Output</button>
+        <button type="button" class="btn btn-outline" id="toggleStreamBtn" onclick="toggleStream()" aria-pressed="false">
+          <span aria-hidden="true">👁</span> Show Live Content Output
+        </button>
       </div>
 
     </div>
@@ -523,48 +614,48 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
   <div class="card hidden" id="step4Card">
     <div class="card-body">
       <div class="download-section">
-        <div style="font-size:48px;margin-bottom:12px">🎉</div>
+        <div style="font-size:48px;margin-bottom:12px" aria-hidden="true">🎉</div>
         <h3>Courseware Bundle is Ready!</h3>
         <p id="downloadSummary">All artifacts generated, validated, and rendered successfully.</p>
-        <button class="btn btn-download" onclick="downloadBundle()">
-          📄 Download Courseware ZIP Bundle
+        <button type="button" class="btn btn-download" onclick="downloadBundle()">
+          <span aria-hidden="true">📄</span> Download Courseware ZIP Bundle
         </button>
         <div style="margin-top:20px">
-          <button class="btn btn-outline" onclick="resetAll()">Generate Another Chapter</button>
+          <button type="button" class="btn btn-outline" onclick="resetAll()">Generate Another Chapter</button>
         </div>
       </div>
 
       <!-- Preview tabs -->
       <div class="preview-section">
-        <div class="tabs">
-          <button class="tab-btn active" onclick="switchTab('lessonPreview')">Lesson Plan</button>
-          <button class="tab-btn" onclick="switchTab('slidesPreview')">Slides Outline</button>
-          <button class="tab-btn" onclick="switchTab('scriptPreview')">Video Scripts</button>
-          <button class="tab-btn" onclick="switchTab('unitPreview')">Unit Assessment</button>
-          <button class="tab-btn" onclick="switchTab('reportPreview')">Audit & RAG Logs</button>
+        <div class="tabs" role="tablist" aria-label="Generated content previews">
+          <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="lessonPreview" id="tab-lessonPreview" onclick="switchTab('lessonPreview', this)">Lesson Plan</button>
+          <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="slidesPreview" id="tab-slidesPreview" onclick="switchTab('slidesPreview', this)">Slides Outline</button>
+          <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="scriptPreview" id="tab-scriptPreview" onclick="switchTab('scriptPreview', this)">Video Scripts</button>
+          <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="unitPreview" id="tab-unitPreview" onclick="switchTab('unitPreview', this)">Unit Assessment</button>
+          <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="reportPreview" id="tab-reportPreview" onclick="switchTab('reportPreview', this)">Audit & RAG Logs</button>
         </div>
 
-        <div id="lessonPreview" class="tab-content active">
+        <div id="lessonPreview" class="tab-content active" role="tabpanel" aria-labelledby="tab-lessonPreview">
           <h3>Generated Lesson Content</h3>
           <div id="lessonPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
         </div>
 
-        <div id="slidesPreview" class="tab-content">
+        <div id="slidesPreview" class="tab-content" role="tabpanel" aria-labelledby="tab-slidesPreview">
           <h3>Presentation Slides</h3>
           <div id="slidesPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
         </div>
 
-        <div id="scriptPreview" class="tab-content">
+        <div id="scriptPreview" class="tab-content" role="tabpanel" aria-labelledby="tab-scriptPreview">
           <h3>Lesson Video Scripts</h3>
           <div id="scriptPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
         </div>
 
-        <div id="unitPreview" class="tab-content">
+        <div id="unitPreview" class="tab-content" role="tabpanel" aria-labelledby="tab-unitPreview">
           <h3>Unit Assessment</h3>
           <div id="unitPreviewContent" style="white-space: pre-wrap; font-size: 13px; line-height: 1.6; color: #333;"></div>
         </div>
 
-        <div id="reportPreview" class="tab-content">
+        <div id="reportPreview" class="tab-content" role="tabpanel" aria-labelledby="tab-reportPreview">
           <h3>Validation & RAG Ingestion Logs</h3>
           <div id="reportPreviewContent" style="font-size: 13px; color: #333;"></div>
         </div>
@@ -574,16 +665,20 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
   </div>
 
   <!-- ── Error display ── -->
-  <div class="hidden" id="errorBox">
+  <div class="hidden" id="errorBox" role="alert" aria-live="assertive">
     <div class="alert alert-danger" id="errorMsg"></div>
   </div>
 
 </main>
 
+<footer>
+  <p>Mediatiz Lesson & Courseware Generator</p>
+</footer>
+
 <script>
 // ── State ──────────────────────────────────────────────────────────
 let structure = null;
-let lessonChips = {}; 
+let lessonChips = {};
 let showStream = false;
 let tokenBuffer = '';
 
@@ -599,7 +694,7 @@ window.addEventListener('load', async () => {
     } else if (data.ollama && !data.modelFound) {
       badge.textContent = '⚠️ Model not found';
       badge.className = 'model-badge err';
-      showError(`Ollama is running but qwen2.5:14b is not installed. Run: ollama pull qwen2.5:14b`);
+      showError(`Ollama is running but ${data.model || 'the configured model'} is not installed. Run: ollama pull ${data.model || '<model>'}`);
     } else {
       badge.textContent = '❌ Ollama offline';
       badge.className = 'model-badge err';
@@ -619,7 +714,7 @@ async function generateStructure() {
   const subject = document.getElementById('subjectSelect').value;
   const disableVerification = document.getElementById('disableVerificationCheck').checked;
 
-  if (!slos) { showError('Please paste your SLOs first.'); return; }
+  if (!slos) { showError('Please paste your SLOs first.'); document.getElementById('slosInput').focus(); return; }
 
   clearError();
   setLoading('generateStructureBtn', true, 'Planning...');
@@ -641,6 +736,8 @@ async function generateStructure() {
     document.getElementById('badge1').textContent = '✓';
     document.getElementById('badge2').className = 'step-badge active';
     document.getElementById('step2Card').scrollIntoView({ behavior: 'smooth' });
+    document.getElementById('step2Card').querySelector('h2').setAttribute('tabindex', '-1');
+    document.getElementById('step2Card').querySelector('h2').focus();
 
   } catch (err) {
     showError(err.message);
@@ -655,7 +752,7 @@ function renderStructure(s) {
 
   // Chapter overview
   document.getElementById('chapterOverview').innerHTML = `
-    <h3>📖 Chapter ${chapter.number}: ${chapter.title} — Grade ${chapter.grade}</h3>
+    <h3><span aria-hidden="true">📖</span> Chapter ${chapter.number}: ${chapter.title} — Grade ${chapter.grade}</h3>
     <p>${chapter.overview || ''}</p>
   `;
 
@@ -680,6 +777,11 @@ function renderStructure(s) {
 function startGeneration() {
   if (!structure) return;
 
+  window.generationStartTime = Date.now();
+  window.completedSteps = 0;
+  window.totalSteps = 0;
+  document.getElementById('progressEta').textContent = 'ETA: Calculating...';
+
   show('step3Card');
   document.getElementById('badge2').className = 'step-badge done';
   document.getElementById('badge2').textContent = '✓';
@@ -702,14 +804,25 @@ function buildProgressUI(lessons) {
 
     const header = document.createElement('div');
     header.className = 'lesson-progress-header';
-    header.innerHTML = `<span>📘</span> <span>Lesson ${lesson.number}: ${lesson.title}</span>`;
+    header.style.display = 'flex';
+    header.style.justifyContent = 'space-between';
+    header.style.alignItems = 'center';
+    header.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span aria-hidden="true">📘</span>
+        <span>Lesson ${lesson.number}: ${lesson.title}</span>
+      </div>
+      <button type="button" class="btn btn-outline hidden" id="download-btn-${lesson.number}" onclick="downloadLesson(${lesson.number})" style="padding:4px 12px; font-size:11px; font-weight:normal; margin-left:auto;">
+        <span aria-hidden="true">📥</span> Download Lesson ${lesson.number}
+      </button>
+    `;
     block.appendChild(header);
 
     const chips = document.createElement('div');
     chips.className = 'section-chips';
 
-    const sections = ['Warm-Up', 'Concept Building', 'Worked Examples', 'Pop-Up Quiz', 'Mental Maths', 'Practice Questions', 'Key Takeaways', 'Video Script'];
-    const sectionKeys = ['warmUp', 'conceptBuilding', 'examples', 'popUpQuiz', 'mentalMaths', 'practiceQuestions', 'keyTakeaways', 'videoScript'];
+    const sections = ['Introduction', 'Warm-Up', 'Concept Building', 'Worked Examples', 'Pop-Up Quiz', 'Mental Maths', 'Practice Questions', 'Key Takeaways', 'Video Script'];
+    const sectionKeys = ['introduction', 'warmUp', 'conceptBuilding', 'examples', 'popUpQuiz', 'mentalMaths', 'practiceQuestions', 'keyTakeaways', 'videoScript'];
 
     lessonChips[lesson.number] = {};
 
@@ -732,7 +845,7 @@ function buildProgressUI(lessons) {
   block.id = 'assessment-block';
   block.innerHTML = `
     <div class="lesson-progress-header">
-      <span>📝</span> <span>Global Chapter Materials</span>
+      <span aria-hidden="true">📝</span> <span>Global Chapter Materials</span>
     </div>
     <div class="section-chips">
       <span class="section-chip" id="chip-0-unitAssessment">Unit Assessment</span>
@@ -756,6 +869,9 @@ function listenToGeneration() {
       document.getElementById('progressText').textContent = msg.progress + '%';
       document.getElementById('progressDetail').textContent = `Step ${msg.step} of ${msg.totalSteps}`;
       document.getElementById('progressBar').style.width = msg.progress + '%';
+      document.getElementById('progressBarWrap').setAttribute('aria-valuenow', String(msg.progress));
+
+      window.totalSteps = msg.totalSteps;
 
       // Mark chip as active
       if (msg.lessonNum > 0) {
@@ -800,22 +916,27 @@ function listenToGeneration() {
       const chipId = msg.lessonNum > 0 ? `#chip-${msg.lessonNum}-${msg.section}` : `#chip-0-${msg.section}`;
       const chip = document.querySelector(chipId);
       if (chip) chip.className = 'section-chip done';
+      updateEta();
     }
 
     if (msg.type === 'section_error') {
       const chipId = msg.lessonNum > 0 ? `#chip-${msg.lessonNum}-${msg.section}` : `#chip-0-${msg.section}`;
       const chip = document.querySelector(chipId);
       if (chip) chip.className = 'section-chip error';
+      updateEta();
     }
 
     if (msg.type === 'lesson_done') {
       const header = document.querySelector(`#lesson-block-${msg.lessonNum} .lesson-progress-header span:first-child`);
       if (header) header.textContent = '✅';
+      const dlBtn = document.getElementById(`download-btn-${msg.lessonNum}`);
+      if (dlBtn) dlBtn.classList.remove('hidden');
     }
 
     if (msg.type === 'all_done') {
       document.getElementById('progressBar').style.width = '100%';
       document.getElementById('progressText').textContent = '100%';
+      document.getElementById('progressBarWrap').setAttribute('aria-valuenow', '100');
       document.getElementById('progressLabel').textContent = 'Complete!';
       document.getElementById('badge3').className = 'step-badge done';
       document.getElementById('badge3').textContent = '✓';
@@ -825,7 +946,7 @@ function listenToGeneration() {
 
       // Load previews
       await loadPreviews();
-      
+
       show('step4Card');
       document.getElementById('step4Card').scrollIntoView({ behavior: 'smooth' });
       evtSource.close();
@@ -845,6 +966,7 @@ function listenToGeneration() {
 
 function getChipKey(label) {
   const map = {
+    'Introduction':        'introduction',
     'Warm-Up':            'warmUp',
     'Concept Building':   'conceptBuilding',
     'Worked Examples':    'examples',
@@ -863,7 +985,7 @@ async function loadPreviews() {
   try {
     const res = await fetch('/api/preview');
     const data = await res.json();
-    
+
     // 1. Lessons preview
     let lessonHtml = '';
     data.structure.lessons.forEach((l, idx) => {
@@ -921,7 +1043,7 @@ async function loadPreviews() {
     } else {
       logsHtml += '<p>Citations logged in final download package manifest.json</p>';
     }
-    
+
     document.getElementById('reportPreviewContent').innerHTML = logsHtml;
 
   } catch (err) {
@@ -929,20 +1051,49 @@ async function loadPreviews() {
   }
 }
 
-function switchTab(tabId) {
+function switchTab(tabId, btn) {
   // Hide all contents
   document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
   // Deactivate all buttons
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.remove('active');
+    b.setAttribute('aria-selected', 'false');
+  });
 
   // Show selected content
   document.getElementById(tabId).classList.add('active');
   // Highlight active button
-  event.target.classList.add('active');
+  if (btn) {
+    btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true');
+  }
 }
 
 function downloadBundle() {
   window.location.href = '/api/download';
+}
+
+function downloadLesson(num) {
+  window.location.href = `/api/download/lesson/${num}`;
+}
+
+function updateEta() {
+  if (window.generationStartTime && window.totalSteps) {
+    window.completedSteps = (window.completedSteps || 0) + 1;
+    const elapsedMs = Date.now() - window.generationStartTime;
+    const avgMsPerStep = elapsedMs / window.completedSteps;
+    const remainingSteps = window.totalSteps - window.completedSteps;
+
+    if (remainingSteps > 0) {
+      const remainingSec = Math.round((remainingSteps * avgMsPerStep) / 1000);
+      const m = Math.floor(remainingSec / 60);
+      const s = remainingSec % 60;
+      const etaText = m > 0 ? `${m}m ${s}s remaining` : `${s}s remaining`;
+      document.getElementById('progressEta').textContent = `ETA: ${etaText}`;
+    } else {
+      document.getElementById('progressEta').textContent = 'ETA: Done';
+    }
+  }
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -950,23 +1101,25 @@ function toggleStream() {
   showStream = !showStream;
   const el = document.getElementById('tokenStream');
   const btn = document.getElementById('toggleStreamBtn');
+  btn.setAttribute('aria-pressed', String(showStream));
   if (showStream) {
     show(el);
-    btn.textContent = '🙈 Hide Live Output';
+    btn.innerHTML = '<span aria-hidden="true">🙈</span> Hide Live Output';
     el.textContent = tokenBuffer;
     el.scrollTop = el.scrollHeight;
   } else {
     hide(el);
-    btn.textContent = '👁 Show Live Output';
+    btn.innerHTML = '<span aria-hidden="true">👁</span> Show Live Output';
   }
 }
 
 function setLoading(btnId, loading, text) {
   const btn = document.getElementById(btnId);
   btn.disabled = loading;
+  btn.setAttribute('aria-busy', String(loading));
   btn.innerHTML = loading
-    ? `<span class="spinner"></span> <span>${text}</span>`
-    : `<span>${text}</span>`;
+    ? `<span class="spinner" aria-hidden="true"></span> <span>${text}</span>`
+    : `<span aria-hidden="true">✨</span> <span>${text}</span>`;
 }
 
 function show(el) {
@@ -981,7 +1134,7 @@ function hide(el) {
 function showError(msg) {
   const box = document.getElementById('errorBox');
   const txt = document.getElementById('errorMsg');
-  txt.innerHTML = '❌ ' + msg;
+  txt.innerHTML = '<span aria-hidden="true">❌</span> ' + msg;
   box.classList.remove('hidden');
   box.scrollIntoView({ behavior: 'smooth' });
 }
@@ -1008,7 +1161,7 @@ async function resetAll() {
   document.getElementById('progressTrack').innerHTML = '';
   document.getElementById('validationLogItems').innerHTML = '';
   hide('validationLog');
-  setLoading('generateStructureBtn', false, '✨ Generate Chapter Structure');
+  setLoading('generateStructureBtn', false, 'Generate Chapter Structure');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 

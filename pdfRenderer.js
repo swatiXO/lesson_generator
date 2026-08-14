@@ -17,29 +17,15 @@ try {
 function markdownToHtml(text) {
   if (!text) return '';
   
-  let html = text
+  // Escape html characters
+  let escapedText = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-    
-  // Headings
-  html = html.replace(/^#### (.*)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^### (.*)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.*)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.*)$/gm, '<h1>$1</h1>');
-  
-  // Bold
-  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  
-  // Lists
-  // Simple bullet conversion
-  html = html.replace(/^[-•*]\s+(.*)$/gm, '<li>$1</li>');
-  // Simple number list conversion
-  html = html.replace(/^\d+[\.\)]\s+(.*)$/gm, '<li>$1</li>');
-  
-  // Paragraphs
-  const lines = html.split('\n');
+
+  const lines = escapedText.split('\n');
   let inList = false;
+  let inTable = false;
   let finalHtml = [];
   
   for (let i = 0; i < lines.length; i++) {
@@ -49,40 +35,100 @@ function markdownToHtml(text) {
         finalHtml.push('</ul>');
         inList = false;
       }
+      if (inTable) {
+        finalHtml.push('</table>');
+        inTable = false;
+      }
       continue;
     }
     
-    if (line.startsWith('<li>')) {
+    // Markdown table row
+    if (line.startsWith('|')) {
+      if (inList) {
+        finalHtml.push('</ul>');
+        inList = false;
+      }
+      if (!inTable) {
+        finalHtml.push('<table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 10pt; font-family: sans-serif;">');
+        inTable = true;
+      }
+      
+      let cells = line.split('|').map(c => c.trim());
+      // Remove empty elements at the boundaries
+      if (cells[0] === '') cells.shift();
+      if (cells[cells.length - 1] === '') cells.pop();
+      
+      const isSeparator = cells.every(c => /^:-*:?$/.test(c) || c.startsWith('-'));
+      if (isSeparator) continue; // skip divider lines
+      
+      // Determine if header row
+      const isHeader = finalHtml[finalHtml.length - 1].includes('<table');
+      const tag = isHeader ? 'th' : 'td';
+      const cellStyle = isHeader
+        ? 'background: #F2F2F2; font-weight: bold; border: 1px solid #DEE2E6; padding: 8px; text-align: left;'
+        : 'border: 1px solid #DEE2E6; padding: 8px; text-align: left;';
+        
+      const cellsHtml = cells.map(c => {
+        // Strip bold markers since headers or cells are styled
+        let clean = c.replace(/\*\*(.*?)\*\*/g, '$1');
+        return `    <${tag} style="${cellStyle}">${clean}</${tag}>`;
+      }).join('\n');
+      
+      finalHtml.push('  <tr>\n' + cellsHtml + '\n  </tr>');
+      continue;
+    } else {
+      if (inTable) {
+        finalHtml.push('</table>');
+        inTable = false;
+      }
+    }
+    
+    // Normal markdown parsing
+    if (line.startsWith('#### ')) { finalHtml.push(`<h4>${line.slice(5)}</h4>`); continue; }
+    if (line.startsWith('### '))  { finalHtml.push(`<h3>${line.slice(4)}</h3>`); continue; }
+    if (line.startsWith('## '))   { finalHtml.push(`<h2>${line.slice(3)}</h2>`); continue; }
+    if (line.startsWith('# '))    { finalHtml.push(`<h1>${line.slice(2)}</h1>`); continue; }
+    
+    // Inline bold formatting
+    line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Lists
+    if (line.startsWith('- ') || line.startsWith('• ') || line.startsWith('* ')) {
       if (!inList) {
         finalHtml.push('<ul>');
         inList = true;
       }
-      finalHtml.push(line);
-    } else if (line.startsWith('<h') || line.startsWith('</h')) {
-      if (inList) {
-        finalHtml.push('</ul>');
-        inList = false;
+      finalHtml.push(`<li>${line.replace(/^([-•*])\s+/, '')}</li>`);
+      continue;
+    }
+    if (/^\d+[\.\)]\s/.test(line)) {
+      if (!inList) {
+        finalHtml.push('<ol>');
+        inList = true;
       }
-      finalHtml.push(line);
+      finalHtml.push(`<li>${line.replace(/^\d+[\.\)]\s+/, '')}</li>`);
+      continue;
+    }
+    
+    if (inList) {
+      finalHtml.push('</ul>');
+      inList = false;
+    }
+    
+    // Image placeholder
+    if (line.startsWith('__IMAGE__:')) {
+      const imgPath = line.replace('__IMAGE__:', '');
+      finalHtml.push(`<div class="image-container"><img src="file:///${imgPath.replace(/\\/g, '/')}" /></div>`);
     } else {
-      if (inList) {
-        finalHtml.push('</ul>');
-        inList = false;
-      }
-      
-      // Check if it's an image block placeholder we inserted
-      if (line.startsWith('__IMAGE__:')) {
-        const imgPath = line.replace('__IMAGE__:', '');
-        // Embed image
-        finalHtml.push(`<div class="image-container"><img src="file:///${imgPath.replace(/\\/g, '/')}" /></div>`);
-      } else {
-        finalHtml.push(`<p>${line}</p>`);
-      }
+      finalHtml.push(`<p>${line}</p>`);
     }
   }
   
   if (inList) {
     finalHtml.push('</ul>');
+  }
+  if (inTable) {
+    finalHtml.push('</table>');
   }
   
   return finalHtml.join('\n');
@@ -173,9 +219,6 @@ function buildHtmlDocument(structure, generatedSections, imagesMap = {}) {
         @page {
           size: A4;
           margin: 20mm;
-          @bottom-center {
-            content: counter(page);
-          }
         }
         
         body {

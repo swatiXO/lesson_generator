@@ -70,8 +70,8 @@ function parseSectionToSlides(sectionLabel, rawText) {
     // Regular text
     currentBullets.push({ text: line });
     
-    // Split slide if it gets too full
-    if (currentBullets.length >= 6) {
+    // Split slide if it gets too full (cap at 4 bullets to prevent overflow)
+    if (currentBullets.length >= 4) {
       slides.push({ title: slideTitle, subtitle: slideSub, bullets: currentBullets });
       currentBullets = [];
     }
@@ -157,9 +157,6 @@ async function buildSlides(lesson, generatedSections, imagesMap = {}) {
     { key: 'warmUp',            label: '🌟 Warm-Up'             },
     { key: 'conceptBuilding',   label: '📖 Concept Building'    },
     { key: 'examples',          label: '💡 Worked Examples'     },
-    { key: 'popUpQuiz',         label: '✏️ Pop-Up Quiz'         },
-    { key: 'mentalMaths',       label: '🧠 Mental Maths'        },
-    { key: 'practiceQuestions', label: '📝 Practice Questions'  },
     { key: 'keyTakeaways',      label: '⭐ Key Takeaways'       },
   ];
   
@@ -167,7 +164,8 @@ async function buildSlides(lesson, generatedSections, imagesMap = {}) {
     const rawText = generatedSections[sec.key];
     if (!rawText) continue;
     
-    const parsedSlides = parseSectionToSlides(sec.label, rawText);
+    let parsedSlides = parseSectionToSlides(sec.label, rawText);
+    
     const hasImage = imagesMap[sec.key] ? true : false;
     
     parsedSlides.forEach((slideData, slideIdx) => {

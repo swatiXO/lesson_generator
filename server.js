@@ -11,6 +11,7 @@ const {
 } = require('./DocBuilder');
 const {
   structurePrompt,
+  introductionPrompt,
   warmUpPrompt,
   conceptBuildingPrompt,
   examplesPrompt,
@@ -20,6 +21,7 @@ const {
   keyTakeawaysPrompt,
   videoScriptPrompt,
   unitAssessmentPrompt,
+  hydrateStructure, // NEW — reconstructs lesson.slo_descriptions from SLO codes
 } = require('./prompts');
 const { queryKnowledgeBase } = require('./kb');
 const { generateImageForSection } = require('./imageGenerator');
@@ -64,12 +66,20 @@ app.post('/api/structure', async (req, res) => {
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('Model did not return valid JSON.\n\nRaw output:\n' + raw.slice(0, 500));
 
-    const structure = JSON.parse(jsonMatch[0]);
+    let structure = JSON.parse(jsonMatch[0]);
 
     // Validate structure
     if (!structure.chapter || !structure.lessons?.length) {
       throw new Error('Invalid structure returned by model');
     }
+
+    // NEW — structurePrompt now returns SLO codes only (not full description
+    // text, to keep generation fast — see prompts.js). Reconstruct
+    // lesson.slo_descriptions from the raw SLO text the caller supplied,
+    // before storing/using the structure anywhere. Every downstream section
+    // prompt reads lesson.slo_descriptions directly, so skipping this makes
+    // them silently undefined.
+    structure = hydrateStructure(structure, slos);
 
     // Store for later use (supporting full SDDD flow)
     currentJob = { 
@@ -114,7 +124,10 @@ app.get('/api/generate', async (req, res) => {
   const { chapter, lessons } = structure;
 
   // sectionDefs with correct fn signatures matching new prompts.js
+  // "introduction" runs first — a short, grade-friendly hook (e.g. "sharing a pizza"
+  // for fractions) that sets up the topic before Warm-Up.
   const sectionDefs = [
+    { key: 'introduction',      label: 'Introduction',        fn: (l, ctx) => introductionPrompt(l, chapter, chapter.grade, ctx) },
     { key: 'warmUp',            label: 'Warm-Up',             fn: (l, ctx) => warmUpPrompt(l, chapter, chapter.grade, ctx) },
     { key: 'conceptBuilding',   label: 'Concept Building',    fn: (l, ctx, wup) => conceptBuildingPrompt(l, chapter, chapter.grade, wup, ctx) },
     { key: 'examples',          label: 'Worked Examples',     fn: (l, ctx, cb) => examplesPrompt(l, chapter, chapter.grade, cb, ctx) },
@@ -171,6 +184,17 @@ app.get('/api/generate', async (req, res) => {
         let text = '';
         let validationReport = { ok: true, attempts: 0, errors: [] };
 
+        // NEW — keep the ORIGINAL system/user prompt from attempt 1 around.
+        // The old retry logic discarded it entirely on attempt 2+ and replaced
+        // it with a bare "fix the errors" prompt that carried none of the
+        // scope fence / SLO checklist / self-study rules — so a retry could
+        // "fix" the reported issue while drifting on everything else the
+        // original prompt was constraining. Retries now reuse the exact same
+        // system prompt and append the feedback to the exact same user
+        // prompt, so every constraint stays in force across attempts.
+        let originalSystemPrompt = null;
+        let originalUserPrompt = null;
+
         while (attempt < 3 && !success) {
           attempt++;
           validationReport.attempts = attempt;
@@ -185,15 +209,19 @@ app.get('/api/generate', async (req, res) => {
             const promptsObj = sec.fn(...params);
             systemPrompt = promptsObj.system;
             userPrompt = promptsObj.user;
+            originalSystemPrompt = systemPrompt;
+            originalUserPrompt = userPrompt;
           } else {
-            systemPrompt = 'You are an expert curriculum designer. Correct the errors in the section.';
-            userPrompt = `You are rewriting the ${sec.label} section for the lesson "${lesson.title}".
-The previous attempt failed validation checks. Here is the feedback/errors:
-${validationReport.errors[validationReport.errors.length - 1]}
+            const lastFeedback = validationReport.errors[validationReport.errors.length - 1];
+            systemPrompt = originalSystemPrompt;
+            userPrompt = `${originalUserPrompt}
 
-Please regenerate the ${sec.label} section, correcting these errors.
-Ensure you follow all original instructions and maintain proper structure and tone.
-Start directly with the content. No preamble.`;
+IMPORTANT — A previous attempt at this exact task had the following problems. Fix them in this
+attempt while still following every instruction above (SLO coverage checklist, scope rules,
+tone/format constraints, etc. all still apply):
+${lastFeedback}
+
+Write the corrected, complete section now, following all the original instructions. No preamble.`;
           }
 
           try {
@@ -204,8 +232,7 @@ Start directly with the content. No preamble.`;
             });
 
             // Run validation
-            const contextText = contextChunks.map(c => c.text).join('\n');
-            const validation = await validateSection(sec.key, sec.label, text, lesson, contextText);
+            const validation = await validateSection(sec.key, sec.label, text, lesson, chapter, currentJob.grade, contextChunks);
 
             if (validation.ok) {
               success = true;
@@ -240,8 +267,8 @@ Start directly with the content. No preamble.`;
           progress: pct,
         });
 
-        // Trigger Image generation for Concept Building / Examples
-        if (sec.key === 'conceptBuilding' || sec.key === 'examples') {
+        // Trigger image generation for every section (one image per heading)
+        {
           try {
             send('image_start', { lessonNum: lesson.number, section: sec.key });
             const imgPath = await generateImageForSection(
@@ -328,6 +355,101 @@ Start directly with the content. No preamble.`;
     send('error', { error: err.message });
   } finally {
     res.end();
+  }
+});
+
+// ─── Step 3b: Build and download individual lesson bundle ─────────
+app.get('/api/download/lesson/:num', async (req, res) => {
+  const lessonNum = parseInt(req.params.num);
+  if (!currentJob) return res.status(400).json({ error: 'No active job.' });
+
+  const { structure, generatedSections, videoScripts, images, validationReport } = currentJob;
+  const lessonIndex = lessonNum - 1;
+
+  const lesson = structure.lessons.find(l => l.number === lessonNum);
+  if (!lesson) return res.status(404).json({ error: 'Lesson not found.' });
+
+  const sections = generatedSections[lessonIndex];
+  if (!sections || !Object.keys(sections).length) {
+    return res.status(400).json({ error: 'Lesson content not yet generated.' });
+  }
+
+  const tempDir = path.join(__dirname, 'public', `bundle_temp_lesson_${lessonNum}_${Date.now()}`);
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  try {
+    const zip = new AdmZip();
+
+    // Construct a sub-structure with only this lesson
+    const singleStructure = { chapter: structure.chapter, lessons: [lesson] };
+    const singleSections = { 0: sections };
+
+    // 1. Lesson Docx
+    console.log(`[download] Building lesson ${lessonNum} docx...`);
+    const docxBuffer = await buildDocx(singleStructure, singleSections);
+    zip.addFile(`Lesson_${lessonNum}_Plan.docx`, docxBuffer);
+
+    // 2. Lesson PDF
+    console.log(`[download] Building lesson ${lessonNum} pdf...`);
+    const pdfPath = path.join(tempDir, `Lesson_${lessonNum}_Plan.pdf`);
+    const singleImages = { 0: images[lessonIndex] || {} };
+    await buildLessonPdf(singleStructure, singleSections, singleImages, pdfPath);
+    zip.addLocalFile(pdfPath);
+
+    // 3. Slides
+    console.log(`[download] Building lesson ${lessonNum} slides...`);
+    const lessonImages = images[lessonIndex] || {};
+    const slidesBuffer = await buildSlides(lesson, sections, lessonImages);
+    zip.addFile(`Lesson_${lessonNum}_Slides.pptx`, slidesBuffer);
+
+    // 4. Pop quiz (Word)
+    if (sections.popUpQuiz) {
+      console.log(`[download] Building lesson ${lessonNum} pop quiz docx...`);
+      const quizBuffer = await buildPopQuizDocx([lesson], { 0: sections });
+      zip.addFile(`Lesson_${lessonNum}_Quiz.docx`, quizBuffer);
+    }
+
+    // 5. Video script (Word)
+    const scriptText = videoScripts[lessonIndex];
+    if (scriptText) {
+      console.log(`[download] Building lesson ${lessonNum} video script docx...`);
+      const scriptBuffer = await buildVideoScriptDocx([lesson], { 0: scriptText });
+      zip.addFile(`Lesson_${lessonNum}_Video_Script.docx`, scriptBuffer);
+    }
+
+    // 6. Manifest file
+    console.log(`[download] Creating lesson ${lessonNum} manifest...`);
+    const manifest = {
+      meta: {
+        chapterNumber: structure.chapter.number,
+        chapterTitle: structure.chapter.title,
+        lessonNumber: lessonNum,
+        lessonTitle: lesson.title,
+        grade: currentJob.grade,
+        subject: currentJob.subject,
+        timestamp: new Date().toISOString()
+      },
+      validation: { [lessonIndex]: validationReport[lessonIndex] || {} }
+    };
+    zip.addFile(`Lesson_${lessonNum}_manifest.json`, Buffer.from(JSON.stringify(manifest, null, 2)));
+
+    // Send ZIP file
+    const zipBuffer = zip.toBuffer();
+    const filename = `Lesson_${lessonNum}_${lesson.title.replace(/\s+/g, '_')}_Bundle.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(zipBuffer);
+    console.log(`[download] Sent lesson ${lessonNum} ZIP:`, filename);
+
+  } catch (err) {
+    console.error(`[download] Error building lesson ${lessonNum} ZIP:`, err.message);
+    res.status(500).json({ error: err.message });
+  } finally {
+    // Cleanup temp files
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (_) {}
   }
 });
 

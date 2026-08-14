@@ -2,9 +2,29 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
-const { generate } = require('./ollama');
+const { generate, generateFast } = require('./ollama');
 const { getChromePath } = require('./puppeteerHelper');
+const { imageSearchQueryPrompt } = require('./prompts');
 
+// Manually load environment variables from .env if it exists in root
+function loadEnv() {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
+    lines.forEach(line => {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match) {
+        const key = match[1];
+        let val = match[2] || '';
+        if (val.length > 0 && val.charAt(0) === '"' && val.charAt(val.length - 1) === '"') {
+          val = val.substring(1, val.length - 1);
+        }
+        process.env[key] = val.trim();
+      }
+    });
+  }
+}
+loadEnv();
 // Dynamically import puppeteer since it's installed via npm
 let puppeteer;
 try {
@@ -138,66 +158,81 @@ async function findVisionModel() {
 }
 
 /**
- * Uses Puppeteer to search DuckDuckGo Images and find the first image link
+ * Uses Google Custom Search JSON API (preferred) or Openverse API (fallback)
+ * to find the top image candidates matching the query.
+ * Returns an array of { type: 'url', url } candidates, best match first.
  */
-async function searchWebImage(query) {
-  if (!puppeteer) throw new Error('Puppeteer is not installed.');
+async function searchWebImage(query, maxResults = 5) {
+  const https = require('https');
   
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      executablePath: getChromePath(),
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-    
-    const page = await browser.newPage();
-    // Use DuckDuckGo Lite or Standard Image search
-    const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(query)}&iax=images&ia=images`;
-    console.log(`[imageGenerator] Searching DuckDuckGo for: "${query}"`);
-    
-    await page.goto(searchUrl, { waitUntil: 'networkidle2' });
-    
-    // Wait for the tiles to load
-    await page.waitForSelector('.tile--img img', { timeout: 10000 });
-    
-    // Extract first image URL
-    const imageUrl = await page.evaluate(() => {
-      const img = document.querySelector('.tile--img img');
-      // Some images on DDG are base64, others are hotlinked
-      // We want the hotlinked URL if possible
-      if (img) {
-        // DDG wraps real source URLs in query params or datasets
-        // E.g., if img is parented by an anchor containing the source URL
-        const parent = img.closest('.tile--img');
-        if (parent) {
-          // Look for direct link dataset
-          const data = parent.getAttribute('data-image-val') || parent.getAttribute('data-src');
-          if (data) return data;
+  const apiKey = process.env.GOOGLE_API_KEY;
+  const cx = process.env.GOOGLE_CX;
+  
+  if (apiKey && cx) {
+    // ─── Route A: Google Custom Search API ───
+    return new Promise((resolve, reject) => {
+      const url = `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(query)}&searchType=image&key=${apiKey}&cx=${cx}&num=${maxResults}`;
+      console.log(`[imageGenerator] Querying Google Custom Search API for: "${query}"`);
+      
+      https.get(url, (res) => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Google API returned status code ${res.statusCode}`));
         }
-        return img.src;
-      }
-      return null;
+        
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (json.error) {
+              return reject(new Error(json.error.message));
+            }
+            if (!json.items || !json.items.length) {
+              return reject(new Error('No results found on Google.'));
+            }
+            const candidates = json.items.map(item => ({ type: 'url', url: item.link, title: item.title }));
+            console.log(`[imageGenerator] Found ${candidates.length} Google image candidate(s) for "${query}"`);
+            resolve(candidates);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }).on('error', reject);
     });
-    
-    await browser.close();
-    
-    if (!imageUrl) {
-      throw new Error('No images found on page.');
-    }
-    
-    // Sometimes the returned URL is a relative path or base64
-    if (imageUrl.startsWith('data:')) {
-      // It's a base64 inline image, we can return it directly or write it
-      return { type: 'base64', data: imageUrl };
-    }
-    
-    console.log(`[imageGenerator] Found image URL: ${imageUrl}`);
-    return { type: 'url', url: imageUrl };
-    
-  } catch (err) {
-    if (browser) await browser.close();
-    throw err;
+  } else {
+    // ─── Route B: Openverse API (Fallback) ───
+    return new Promise((resolve, reject) => {
+      const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${maxResults}`;
+      console.log(`[imageGenerator] Querying Openverse API (fallback) for: "${query}"`);
+      
+      const options = {
+        headers: {
+          'User-Agent': 'LessonPlanGeneratorBot/1.0 (contact: support@mediatiz.com) Node.js/https'
+        }
+      };
+
+      https.get(url, options, (res) => {
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Openverse API returned status code ${res.statusCode}`));
+        }
+        
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          try {
+            const json = JSON.parse(data);
+            if (!json.results || !json.results.length) {
+              return reject(new Error('No results found on Openverse.'));
+            }
+            const candidates = json.results.map(result => ({ type: 'url', url: result.url, title: result.title }));
+            console.log(`[imageGenerator] Found ${candidates.length} Openverse image candidate(s) for "${query}"`);
+            resolve(candidates);
+          } catch (err) {
+            reject(err);
+          }
+        });
+      }).on('error', reject);
+    });
   }
 }
 
@@ -331,67 +366,91 @@ async function generateImageForSection(sectionName, sectionContent, grade, subje
   const destPngPath = path.join(tempDir, `${baseFilename}.png`);
   
   try {
-    // 1. Classify required visual
-    console.log(`[imageGenerator] Classifying required visual for: "${sectionName}"...`);
-    const systemClassify = 'You are an educational assistant. Respond with ONLY one of the following words: "diagram", "photo", or "none". Do not write anything else.';
-    const userClassify = `Grade: ${grade} ${subject}
-Section: ${sectionName}
-Content: ${sectionContent.slice(0, 1000)}
+    // 1. Generate a search query for web images (every section now gets an image —
+    //    no longer gated behind a "does this need a visual?" classification step).
+    //    Routed through imageSearchQueryPrompt (prompts.js) so this stays in sync
+    //    with the same constraints used elsewhere: 3-6 concrete keywords, and
+    //    explicitly no "diagram"/"illustration"/"chart"/etc — those meta-words
+    //    bias image search toward stylized clipart instead of clean, useful results.
+    const { system: querySystem, user: queryUser } = imageSearchQueryPrompt(
+      sectionContent.slice(0, 600),
+      `${subject} — ${sectionName}`,
+      grade
+    );
+    const query = (await generateFast(querySystem, queryUser)).replace(/"/g, '').trim();
+    console.log(`[imageGenerator] Generated search query: "${query}"`);
+    
+    // 2. Search the web and try each candidate image until one downloads successfully
+    const candidates = await searchWebImage(query, 5);
 
-Does this section need a visual illustration?
-- Respond "diagram" for conceptual mathematical visualizations (number lines, models, shapes, graphs, place value charts).
-- Respond "photo" for real-world concrete objects (e.g., photos of apples, groups of children, coins, sports balls, toys).
-- Respond "none" if no visual is needed.
-Answer:`;
+    let downloaded = false;
+    let lastErr = null;
 
-    const classification = (await generate(systemClassify, userClassify)).toLowerCase().trim();
-    console.log(`[imageGenerator] Classification: "${classification}"`);
-    
-    if (classification.includes('none')) {
-      return null;
-    }
-    
-    if (classification.includes('diagram')) {
-      // Generate SVG and render to PNG
-      const svg = await generateSvgDiagram(sectionContent);
-      await renderSvgToPng(svg, destPngPath);
-      return `/images_temp/${baseFilename}.png`;
-    }
-    
-    if (classification.includes('photo')) {
-      // Find a search term from the content
-      const searchPrompt = `Given this lesson content, write a short, specific search query (2-4 words) for an educational image search engine to find a photo illustrating this context. Respond ONLY with the search query.
-Content: ${sectionContent.slice(0, 500)}`;
-      const query = (await generate('You are a search query assistant. Respond with ONLY the query.', searchPrompt)).replace(/"/g, '').trim();
-      
-      console.log(`[imageGenerator] Searching for: "${query}"`);
-      const searchResult = await searchWebImage(query);
-      
-      if (searchResult.type === 'base64') {
-        const base64Data = searchResult.data.replace(/^data:image\/\w+;base64,/, '');
-        fs.writeFileSync(destPngPath, Buffer.from(base64Data, 'base64'));
-        console.log(`[imageGenerator] Saved base64 image: ${destPngPath}`);
-      } else {
-        await downloadImage(searchResult.url, destPngPath);
-        console.log(`[imageGenerator] Downloaded image: ${destPngPath}`);
-      }
-      
-      // Verification (if enabled)
-      if (!disableVerification) {
-        const ok = await verifyImageWithVision(destPngPath, query);
-        if (!ok) {
-          console.warn('[imageGenerator] Image failed verification. Falling back to SVG diagram.');
-          const svg = await generateSvgDiagram(sectionContent);
-          await renderSvgToPng(svg, destPngPath);
+    // Errors like this are transient network/TLS corruption (a dropped or
+    // mangled connection mid-download — often caused by antivirus HTTPS
+    // scanning/interception on Windows) rather than a bad URL, so a same-URL
+    // retry after a short pause is worth trying before giving up on it.
+    const isTransientNetworkError = (err) =>
+      /ECONNRESET|decryption failed|bad record mac|socket hang up|EPIPE|ETIMEDOUT/i.test(err.message || '');
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      let attempt = 0;
+      const maxAttempts = candidate.type === 'base64' ? 1 : 2; // only network downloads benefit from a retry
+      while (attempt < maxAttempts && !downloaded) {
+        attempt++;
+        try {
+          if (candidate.type === 'base64') {
+            const base64Data = candidate.data.replace(/^data:image\/\w+;base64,/, '');
+            fs.writeFileSync(destPngPath, Buffer.from(base64Data, 'base64'));
+            console.log(`[imageGenerator] Saved base64 image (candidate ${i + 1}/${candidates.length}): ${destPngPath}`);
+          } else {
+            await downloadImage(candidate.url, destPngPath);
+            console.log(`[imageGenerator] Downloaded image (candidate ${i + 1}/${candidates.length}, attempt ${attempt}): ${destPngPath}`);
+          }
+          downloaded = true;
+        } catch (err) {
+          lastErr = err;
+          if (attempt < maxAttempts && isTransientNetworkError(err)) {
+            console.warn(`[imageGenerator] Candidate ${i + 1}/${candidates.length} hit a transient network/TLS error ("${err.message}") — retrying same URL once...`);
+            await sleep(500);
+          } else {
+            console.warn(`[imageGenerator] Candidate ${i + 1}/${candidates.length} failed ("${candidate.url}"): ${err.message}. Trying next...`);
+          }
         }
       }
-      
-      return `/images_temp/${baseFilename}.png`;
+      if (downloaded) break;
     }
+
+    if (!downloaded) {
+      const finalErr = lastErr || new Error('All image candidates failed to download.');
+      if (isTransientNetworkError(finalErr)) {
+        console.error(`[imageGenerator] All ${candidates.length} candidates failed with network/TLS errors even after retries. ` +
+          `This pattern (SSL decryption/ECONNRESET) usually means something is intercepting or corrupting HTTPS connections — ` +
+          `check antivirus "HTTPS scanning"/web-shield settings or a VPN/proxy, then falling back to placeholder graphic.`);
+      }
+      throw finalErr;
+    }
+    
+    // 3. Vision model verification (if enabled)
+    if (!disableVerification) {
+      const ok = await verifyImageWithVision(destPngPath, query);
+      if (!ok) {
+        console.warn('[imageGenerator] Image failed vision verification. Falling back to clean text graphic.');
+        const fallbackSvg = `<svg width="400" height="200" viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+          <rect width="100%" height="100%" fill="#F8F9FA" rx="8" stroke="#1F5C99" stroke-width="2"/>
+          <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="14" fill="#1F5C99">${sectionName}: ${query}</text>
+        </svg>`;
+        await renderSvgToPng(fallbackSvg, destPngPath);
+      }
+    }
+    
+    return `/images_temp/${baseFilename}.png`;
     
   } catch (err) {
     console.error(`[imageGenerator] Failed to generate image for ${sectionName}:`, err.message);
-    // Graceful fallback to SVG placeholder on error
+    // Graceful fallback to clean SVG text placeholder on error
     try {
       const fallbackSvg = `<svg width="400" height="200" viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="#F8F9FA" rx="8" stroke="#1F5C99" stroke-width="2"/>
