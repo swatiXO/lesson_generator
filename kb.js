@@ -2,7 +2,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const PYTHON_PATH = 'C:\\Users\\hashi\\anaconda3\\envs\\ai_env\\python.exe';
+const PYTHON_PATH = 'C:\\Users\\hashi\\anaconda3\\python.exe';
 const QUERY_SCRIPT_PATH = path.join(__dirname, 'query_kb.py');
 
 /**

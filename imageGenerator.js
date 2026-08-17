@@ -377,7 +377,7 @@ async function generateImageForSection(sectionName, sectionContent, grade, subje
       `${subject} — ${sectionName}`,
       grade
     );
-    const query = (await generateFast(querySystem, queryUser)).replace(/"/g, '').trim();
+    const query = (await generate(querySystem, queryUser)).replace(/"/g, '').trim();
     console.log(`[imageGenerator] Generated search query: "${query}"`);
     
     // 2. Search the web and try each candidate image until one downloads successfully

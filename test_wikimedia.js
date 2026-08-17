@@ -3,7 +3,7 @@ const https = require('https');
 
 function searchWikimedia(query) {
   // Query MediaWiki search generator in the File namespace (6)
-  const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&prop=imageinfo&iiprop=url|size&format=json&origin=*`;
+  const url = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${encodeURIComponent(query)}&gsrnamespace=6&prop=imageinfo&iiprop=url|size&format=json`;
   
   console.log(`[*] Querying Wikimedia Commons for: "${query}"`);
   console.log(`[*] Request URL: ${url}\n`);
