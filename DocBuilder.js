@@ -1,78 +1,30 @@
-// docBuilder.js — assembles LLM-generated text into a formatted .docx
+// DocBuilder.js — assembles LLM-generated text into a formatted .docx
 //
-// v7 CHANGE SUMMARY:
-// The previous version rendered every section as flat paragraphs under a
-// coloured heading (h1/h2/h3). It had no concept of a "box" at all. This
-// version adds a colour-coded box system — navy section bars, teal Warm-Up
-// boxes, purple Your Turn boxes (with yellow-highlighted answer keys), red
-// Remember/Challenge boxes, teal Word Problem boxes, and green Answer Key
-// boxes — matching the manually-authored reference lessons this pipeline
-// reproduces. Boxes are detected via marker pairs emitted by prompts.js
-// ([WARMUP_START]...[WARMUP_END], [YOURTURN_START]...[YOURTURN_END],
-// [REMEMBER_START]...[REMEMBER_END], [WORDPROBLEM_START]...
-// [WORDPROBLEM_END], [CHALLENGE_START]...[CHALLENGE_END],
-// [ANSWERKEY_START]...[ANSWERKEY_END]) and converted into single-cell
-// bordered Table objects instead of plain Paragraphs.
-//
-// v8 CHANGE SUMMARY:
-//  - Fixed duplicate section titles for Warm-Up / Mental Maths (see
-//    buildAnswerAwareBox's `skipTitle` handling and buildDocx's
-//    titleOverrideByTag construction below) — these two sections are
-//    ENTIRELY one box with nothing else around it, so the navy section bar
-//    above (which already renders the section name) plus the box's own
-//    internal title were both printing the same text with nothing in
-//    between. Other box types (Your Turn, Word Problem, etc.) are
-//    unaffected — those sit inside sections that also have real prose and
-//    several DIFFERENTLY-titled boxes, where the box's own title still
-//    carries real information.
-//  - buildAnswerAwareBox now shares markdown-table parsing with
-//    parsePlainTextToParas via parseMarkdownTableBlock() instead of only
-//    the latter being able to render one. Any answer-key content that
-//    happens to be formatted as a markdown pipe table (models do this
-//    unprompted sometimes — this is a real bug we saw in production, not
-//    hypothetical) previously rendered as literal `| a | b | c |` text
-//    inside a box; it now renders as an actual table there too.
-//  - Added stripStrayMarkdownArtifacts(): lines that are ONLY `**` or
-//    `---` (no other content) — leftover from truncated generation or the
-//    model using them as a bare divider — matched neither parser's bold/
-//    heading/rule detection and fell through to the plain-text fallback,
-//    rendering as literal asterisks/dashes. Stripped before either parser
-//    ever sees the text.
-//  - Uses the shared SECTIONS constants (sections.js) instead of retyping
-//    section-key string literals.
-//
-// Everything else — image embedding, LaTeX-to-OMML math conversion, the
-// review-flag warning block — is kept exactly as it worked before; those
-// were solving real problems unrelated to this revision's scope.
+// Matches the manually-authored reference lessons: navy section bars and
+// colour-coded boxes (teal Warm-Up / Word Problem, purple Your Turn with
+// highlighted answer keys, red Remember / Challenge, green Answer Key).
+// Boxes come from marker pairs emitted by prompts.js ([WARMUP_START] …
+// [WARMUP_END] etc.) and are rendered as single-cell bordered tables.
+// Also handles image embedding, LaTeX → OMML math, and review-flag notes.
 const fs = require('fs');
 const docx = require('docx');
 const {
   Document, Packer, Paragraph, TextRun, ImageRun,
-  Header, Footer, AlignmentType, LevelFormat, HeadingLevel,
+  Header, Footer, AlignmentType, LevelFormat,
   BorderStyle, PageNumber, PageBreak,
   Table, TableRow, TableCell, WidthType, ShadingType,
   Math: DocxMath, MathRun, MathFraction, MathSuperScript, MathSubScript,
   MathSubSuperScript, MathRadical, MathRoundBrackets,
 } = docx;
 
-// resolveImagePath is exported by pdfRenderer.js — reusing it (instead of
-// duplicating the path-guessing logic here) means both files always agree
-// on where a given "/images_temp/xxx.png" web path actually lives on disk.
-// pdfRenderer.js itself is NOT modified.
+// Shared with pdfRenderer.js so both agree where an image path lives on disk.
 const { resolveImagePath } = require('./pdfRenderer');
 
-// [FIX] stripInternalMarkers strips <!-- SLO_CHECK_START -->...<!-- SLO_CHECK_END -->
-// and <!-- QUALITY_CHECK_START -->...<!-- QUALITY_CHECK_END --> before rendering.
-// This is a COMPLETELY SEPARATE mechanism from splitByBoxMarkers below: that one
-// only recognizes [TAG_START]...[TAG_END] (square brackets), this one only
-// recognizes <!-- TAG_START -->...<!-- TAG_END --> (HTML comments) — neither
-// system handles the other's syntax.
+// Removes <!-- SLO_CHECK --> / <!-- QUALITY_CHECK --> HTML-comment blocks.
+// Separate from splitByBoxMarkers below, which handles [TAG_START] syntax.
 const { stripInternalMarkers } = require('./prompts');
 
-// [FIX v8] Single source of truth for section keys — see sections.js's
-// file-level comment for why this exists (a validator.js bug where a
-// section-key rename silently broke a routing check is what prompted it).
-const { SECTIONS } = require('./sections');
+const { SECTIONS, SECTION_LABELS } = require('./sections');
 
 // ─── Colour system ──────────────────────────────────────────────────
 // Matches the manually-authored reference lessons exactly.
@@ -226,17 +178,12 @@ const BOX_STYLES = {
 };
 
 // ─── Shared markdown-table parsing ──────────────────────────────────
-// [FIX v8] Extracted out of parsePlainTextToParas so buildAnswerAwareBox
-// (the box-content parser) can use the exact same logic instead of having
-// no table support at all. Previously a model-generated markdown table
-// landing INSIDE a box (e.g. an Answer Key with tabular data) rendered as
-// literal `| a | b | c |` text, because buildAnswerAwareBox's line loop
-// never checked for a leading `|` the way parsePlainTextToParas did.
+// Used both for plain text and inside boxes (models sometimes format an
+// answer key as a pipe table).
 //
-// `lines` is an array of ALREADY-TRIMMED lines; `startIdx` is the index of
-// the first line starting with '|'. Returns { table: Table|null, nextIdx }
-// where nextIdx is the index of the first line AFTER the consumed table
-// block (caller should resume its own loop from there).
+// `lines` is an array of already-trimmed lines; `startIdx` is the first
+// line starting with '|'. Returns { table: Table|null, nextIdx } where
+// nextIdx is the first line after the table block.
 function parseMarkdownTableBlock(lines, startIdx) {
   const tableLines = [];
   let i = startIdx;
@@ -276,11 +223,8 @@ function parseMarkdownTableBlock(lines, startIdx) {
       });
     });
 
-    // NOTE: TableRow takes { children: [...] }, not { cells: [...] } —
-    // docx has no "cells" property on TableRow at all. Getting this wrong
-    // surfaces as the cryptic "options2.children is not iterable" (docx's
-    // own minified internal variable name) the first time any content
-    // actually exercises this code path.
+    // TableRow takes { children }, not { cells } — the wrong key fails with
+    // docx's cryptic "options2.children is not iterable".
     rows.push(new TableRow({ children: cells }));
   });
 
@@ -296,19 +240,13 @@ function parseMarkdownTableBlock(lines, startIdx) {
  * [TAG_END] markers) into paragraphs, with special handling for an
  * "Answer Key:" line: everything from that line onward is rendered in
  * green with a yellow highlight, matching the reference lessons' style.
- * Everything before it renders as plain question text. Bullets/numbered
- * lines are detected the same way the main line parser does. Markdown
- * tables are also detected here now (see parseMarkdownTableBlock above).
+ * Everything before it renders as plain question text. Bullets, numbered
+ * lines and markdown tables are detected like the main line parser does.
+ *
+ * titleOverride: undefined → the tag's default title; a string → that
+ * title; null → no title (for sections that are one box directly under a
+ * section bar already showing the name).
  */
-// [FIX] titleOverride (3rd param) can be:
-//   - undefined  -> use this box tag's default title (style.title)
-//   - a string   -> use that string as the title instead
-//   - null       -> [FIX v8] render NO title paragraph at all. Needed for
-//     sections that are entirely one box with a navy section bar already
-//     showing the section name right above it (Warm-Up, Mental Maths) —
-//     for those, ANY in-box title (default or overridden) duplicates the
-//     bar. See buildDocx's titleOverrideByTag construction for where this
-//     is actually passed.
 function buildAnswerAwareBox(innerText, tag, titleOverride) {
   const style = BOX_STYLES[tag] || { fill: "F5F5F5", border: C.greyLine, title: tag, titleColor: C.textDark };
   const skipTitle = titleOverride === null;
@@ -330,12 +268,10 @@ function buildAnswerAwareBox(innerText, tag, titleOverride) {
     const line = raw.trim();
     if (!line) { paras.push(gap(60)); continue; }
 
-    // [FIX v8] Markdown table support inside boxes — see
-    // parseMarkdownTableBlock's doc comment above for why this was missing.
     if (line.startsWith('|')) {
       const { table, nextIdx } = parseMarkdownTableBlock(lines.map(l => l.trim()), idx);
       if (table) paras.push(table);
-      idx = nextIdx - 1; // -1 because the for loop's own idx++ will advance past it
+      idx = nextIdx - 1; // the loop's idx++ advances past the table
       continue;
     }
 
@@ -504,16 +440,8 @@ function buildImageCaptionParagraph(entry) {
   });
 }
 
-// [TIER-1] Surfaces answer-verification issues (see answerVerifier.js)
-// visibly inline in the document, right after the section heading.
-//
-// [NOTE v8] With server.js's generation loop now feeding a flagged answer
-// back into a regeneration attempt (see server.js's per-section attempt
-// loop), this box should show up far less often in practice — it now only
-// renders when a section is STILL flagged after exhausting all retry
-// attempts, i.e. a genuine "this shipped anyway, please have a human look"
-// case, rather than the previous behavior of always displaying next to
-// content that was never given a chance to be corrected.
+// Shown right after a section heading when answerVerifier.js still flags
+// answers after every regeneration attempt — i.e. a human needs to check.
 const REVIEW_FLAG_COLOR = 'C0392B';
 
 function buildReviewFlagParagraphs(issues) {
@@ -549,9 +477,7 @@ function buildReviewFlagParagraphs(issues) {
 }
 
 // ─── Math (equation) rendering ─────────────────────────────────────
-// Converts a subset of LaTeX into docx OMML Math components. Unchanged
-// from the previous version — this logic was solid and unrelated to the
-// box-rendering revision.
+// Converts a subset of LaTeX into docx OMML Math components.
 const MATH_SYMBOLS = {
   '\\times':   '×',
   '\\div':     '÷',
@@ -697,12 +623,8 @@ function parseLatexToMathChildren(src) {
   return parseExpression();
 }
 
-// [FIX] Splits a plain-text (non-math) string into TextRun objects,
-// converting **bold** spans into actual bold runs. Without this, bold was
-// only ever detected when it wrapped an ENTIRE line or matched a specific
-// prefix like "Answer:" — never for a **bold** span sitting inside a
-// longer sentence (e.g. "Answer: The integers are **+200** and **-50**."
-// rendered with the literal asterisk characters visible).
+// Splits plain (non-math) text into TextRuns, turning **bold** spans
+// anywhere in the line into bold runs.
 function splitBoldSpans(text, opts = {}) {
   const parts = [];
   const regex = /\*\*(.+?)\*\*/g;
@@ -840,16 +762,8 @@ function stripVisualTags(text) {
     .replace(/\n{3,}/g, '\n\n');
 }
 
-// [FIX v8] Strips lines that consist ONLY of a bare markdown artifact —
-// `**` with nothing between the asterisks, or a `---`-style rule — and
-// nothing else. These come from truncated generation or the model using
-// them as a bare divider. Neither parser's heading/bold/list detection
-// matches an UNPAIRED `**` (hasInlineBold requires a matched pair with
-// content between them) or a lone `---`, so both fell through to the
-// plain-text fallback and rendered as literal asterisk/dash characters —
-// this was observed in real generated output, not a hypothetical. Applied
-// once at the top of parseTextToParas so it covers both plain text and
-// box content uniformly, since it runs before splitByBoxMarkers.
+// Drops lines that are only `**` or `---` (truncated generation or bare
+// dividers), which would otherwise render as literal asterisks/dashes.
 function stripStrayMarkdownArtifacts(text) {
   if (!text) return text;
   return text
@@ -858,10 +772,8 @@ function stripStrayMarkdownArtifacts(text) {
     .join('\n');
 }
 
-// Parses ONLY plain (non-box) text into paragraphs — this is the original
-// line-by-line parser, unchanged in its heading/list/table detection
-// logic, minus the box-marker-specific handling (which is now handled one
-// level up by splitByBoxMarkers before this function ever runs).
+// Line-by-line parser for plain (non-box) text: headings, lists, tables,
+// equations. Box segments are split out beforehand by splitByBoxMarkers.
 function parsePlainTextToParas(rawText, sectionImages, imageLookup, usedTitles) {
   const paras = [];
   const lines = rawText.split('\n');
@@ -900,9 +812,7 @@ function parsePlainTextToParas(rawText, sectionImages, imageLookup, usedTitles) 
       continue;
     }
 
-    // Markdown tables — [FIX v8] now delegates to the shared
-    // parseMarkdownTableBlock() helper (see above) instead of parsing
-    // inline, so buildAnswerAwareBox can use the identical logic.
+    // Markdown tables
     if (line.startsWith('|')) {
       const { table, nextIdx } = parseMarkdownTableBlock(lines.map(l => l.trim()), i);
       if (table) paras.push(table);
@@ -945,13 +855,8 @@ function parsePlainTextToParas(rawText, sectionImages, imageLookup, usedTitles) 
       tryInsertImageForHeading(inner);
       continue;
     }
-    // [FIX] This branch previously bolded the ENTIRE line via a bare run()
-    // whenever it started with "Example"/"Step"/"Part [A-E]"/"Answer:"/
-    // "Working:" — but never stripped any **nested** bold markers inside
-    // that same line, so e.g. "Answer: The integers are **+200** and
-    // **-50**." rendered with the literal asterisk characters still
-    // visible. Now routes through parseInlineMathStyled with bold:true as
-    // the base style, which strips ** spans while still handling $math$.
+    // Label lines ("Example", "Step", "Answer:" …) are bold throughout;
+    // nested **spans** and $math$ are still parsed.
     if (/^(Example|Step|Part [A-E]|Answer:|Working:)\b/.test(line)) {
       const children = (hasInlineMath(line) || hasInlineBold(line))
         ? parseInlineMathStyled(line, { bold: true })
@@ -1030,14 +935,7 @@ function parsePlainTextToParas(rawText, sectionImages, imageLookup, usedTitles) 
  * sectionImages: { subheadingTitle: {path, query, isPlaceholder, source} }
  */
 function parseTextToParas(rawText, sectionImages = {}, titleOverrideByTag = {}) {
-  // [FIX] Strip <!-- SLO_CHECK_START/END --> and <!-- QUALITY_CHECK_START/END -->
-  // blocks FIRST, before stripVisualTags or box-marker splitting ever see the
-  // text — see the import comment above for why this was silently missing.
-  const internalMarkersStripped = stripInternalMarkers(rawText);
-  // [FIX v8] Then strip bare ** / --- artifact-only lines — see
-  // stripStrayMarkdownArtifacts's doc comment above.
-  const artifactsStripped = stripStrayMarkdownArtifacts(internalMarkersStripped);
-  const cleanedText = stripVisualTags(artifactsStripped);
+  const cleanedText = stripVisualTags(stripStrayMarkdownArtifacts(stripInternalMarkers(rawText)));
 
   const imageLookup = {};
   for (const [title, entry] of Object.entries(sectionImages || {})) {
@@ -1051,18 +949,13 @@ function parseTextToParas(rawText, sectionImages = {}, titleOverrideByTag = {}) 
   for (const seg of segments) {
     if (seg.type === 'box') {
       const trimmedContent = (seg.content || '').trim();
-      // [FIX] Guard against an empty or placeholder-only box (e.g. the
-      // model occasionally emits [YOURTURN_START][YOURTURN_END] with
-      // nothing, or just "...", inside). Rendering a visibly empty
-      // coloured box is worse than omitting it.
+      // Skip empty or "..."-only boxes rather than render an empty coloured box.
       if (!trimmedContent || /^[.\s…]{1,5}$/.test(trimmedContent)) {
         console.warn(`[DocBuilder] Skipping empty/placeholder ${seg.tag} box (content was: "${trimmedContent}")`);
         continue;
       }
       paras.push(gap(80));
-      // titleOverrideByTag may map a tag to `null` explicitly (skip title)
-      // or a string (custom title) — `undefined` (key absent) falls back
-      // to the box style's own default title. See buildAnswerAwareBox.
+      // A key mapped to null means "no title" — distinct from an absent key.
       const hasOverride = Object.prototype.hasOwnProperty.call(titleOverrideByTag, seg.tag);
       const overrideValue = hasOverride ? titleOverrideByTag[seg.tag] : undefined;
       paras.push(buildAnswerAwareBox(seg.content, seg.tag, overrideValue));
@@ -1086,19 +979,6 @@ function parseTextToParas(rawText, sectionImages = {}, titleOverrideByTag = {}) 
   }
 
   return paras;
-}
-
-// ─── SLO list ─────────────────────────────────────────────────────
-function sloList(lesson) {
-  const items = [];
-  lesson.slo_descriptions.forEach((desc) => {
-    items.push(new Paragraph({
-      spacing: { before: 60, after: 60 },
-      bullet: { level: 0 },
-      children: [run(desc || "")],
-    }));
-  });
-  return items;
 }
 
 // "SLOs Covered in This Lesson" bar + plain-text SLO codes/descriptions —
@@ -1137,15 +1017,7 @@ async function buildDocx(structure, generatedSections, imagesBySubheading = {}, 
     gap(200),
   );
 
-  const sectionOrder = [
-    { key: SECTIONS.INTRODUCTION,      label: "Introduction"        },
-    { key: SECTIONS.WARM_UP,           label: "Warm-Up Activity"    },
-    { key: SECTIONS.CONCEPT_BUILDING,  label: "Concept Building"    },
-    { key: SECTIONS.MENTAL_MATHS,      label: "Mental Maths"        },
-    { key: SECTIONS.YOUR_TURN_FULL,    label: "Your Turn"           },
-    { key: SECTIONS.PRACTICE_QUESTIONS,label: "Practice Questions"  },
-    { key: SECTIONS.KEY_TAKEAWAYS,     label: "Key Takeaways"       },
-  ];
+  const sectionOrder = Object.entries(SECTION_LABELS).map(([key, label]) => ({ key, label }));
 
   for (let li = 0; li < lessons.length; li++) {
     const lesson = lessons[li];
@@ -1210,17 +1082,8 @@ async function buildDocx(structure, generatedSections, imagesBySubheading = {}, 
         continue;
       }
 
-      // [FIX v8] Warm-Up and Mental Maths are ENTIRELY one box with
-      // nothing else around them — the navy section bar just pushed above
-      // (secBar(sec.label)) already displays this section's name, so ANY
-      // title the box itself would render (default OR a string override)
-      // is pure duplication. Pass an explicit `null` for the WARMUP tag on
-      // both these sections so buildAnswerAwareBox skips its title
-      // paragraph entirely (see its `skipTitle` handling) — this replaces
-      // the previous partial fix, which only renamed Mental Maths's
-      // duplicate from "Warm-Up Activity" to "Mental Maths" without
-      // removing the duplication itself, and left the opening Warm-Up
-      // section's own doubled title untouched.
+      // Warm-Up and Mental Maths are a single box directly under the section
+      // bar, so the box's own title would just repeat the bar.
       const titleOverrideByTag =
         (sec.key === SECTIONS.MENTAL_MATHS || sec.key === SECTIONS.WARM_UP)
           ? { WARMUP: null }
@@ -1291,9 +1154,7 @@ async function buildDocx(structure, generatedSections, imagesBySubheading = {}, 
 }
 
 // ─── "Your Turn" compilation builder ────────────────────────────────
-// Replaces the old buildPopQuizDocx — pulls the full "Your Turn" section
-// (generatedSections[li].yourTurnFull) out of each lesson into its own
-// standalone document, e.g. for printing as a separate worksheet.
+// Collects each lesson's Your Turn section into a standalone worksheet.
 async function buildYourTurnDocx(lessons, generatedSections) {
   const children = [];
   children.push(h1("Your Turn — All Lessons Compilation"), gap(160));
@@ -1320,14 +1181,6 @@ async function buildYourTurnDocx(lessons, generatedSections) {
   return await Packer.toBuffer(doc);
 }
 
-// Deprecated alias — kept so any caller still using the old name doesn't
-// crash outright. Prefer buildYourTurnDocx going forward; this simply
-// forwards to it. The old popUpQuiz section key no longer exists in
-// generatedSections, so this reads yourTurnFull instead.
-async function buildPopQuizDocx(lessons, generatedSections) {
-  console.warn('[DocBuilder] buildPopQuizDocx is deprecated — use buildYourTurnDocx. Forwarding.');
-  return buildYourTurnDocx(lessons, generatedSections);
-}
 
 // ─── Video Script Builder ─────────────────────────────────────────
 async function buildVideoScriptDocx(lessons, videoScripts) {
@@ -1379,8 +1232,7 @@ async function buildUnitAssessmentDocx(chapter, unitAssessmentText) {
 
 module.exports = {
   buildDocx,
-  buildYourTurnDocx,   // NEW (v7) — preferred name
-  buildPopQuizDocx,    // deprecated alias, forwards to buildYourTurnDocx
+  buildYourTurnDocx,
   buildVideoScriptDocx,
   buildUnitAssessmentDocx,
 };

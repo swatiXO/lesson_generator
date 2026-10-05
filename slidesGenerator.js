@@ -22,17 +22,10 @@ function stripGenericNoise(text) {
   if (!text) return '';
   return text
     .replace(/\[VISUAL:[^\]]*\]/gi, '')
-    // [FIX] SLO_CHECK/QUALITY_CHECK use TWO SEPARATE self-closing HTML
-    // comments — "<!-- X_START -->" and "<!-- X_END -->" — not one
-    // continuous <!-- ...content... --> span. A naive /<!--[\s\S]*?-->/g
-    // only strips each tag individually and leaves the real text BETWEEN
-    // them completely untouched (confirmed by direct test — "SLO Coverage
-    // Check" survived every previous version of this function). Matching
-    // the pair by name via a backreference, exactly like prompts.js's
-    // stripInternalMarkers does, actually removes the content between them.
+    // SLO_CHECK / QUALITY_CHECK are separate <!-- X_START --> / <!-- X_END -->
+    // tags, so match the pair by name to remove the text between them too.
     .replace(/<!--\s*(\w+)_START\s*-->[\s\S]*?<!--\s*\1_END\s*-->/gi, '')
-    // Defensive fallback for any lone/malformed comment tag that isn't a
-    // matched pair (e.g. if the model didn't close one correctly).
+    // Any leftover unpaired comment tag
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/^\s*←+\s*$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
@@ -105,22 +98,8 @@ function addBullets(slide, items, opts = {}) {
   const paras = items.map((item, i) => ({
     text: (item.text || item || '').replace(/\*\*/g, ''),
     options: {
-      // [FIX] Was `item.indent ? { type: 'bullet' } : false` — indent was
-      // only ever set for lines that matched a markdown `-`/`1.` pattern,
-      // which is a small minority of Concept Building content. Plain
-      // sentences, "Step 1:"/"Answer:" lines, and definitions (the bulk of
-      // what actually appears on a content slide) never got that flag, so
-      // they rendered with NO bullet marker at all. Bullets now default to
-      // ON for everything, and are only suppressed for items explicitly
-      // marked noBullet — the "⭐ Worked Example" label and standalone bold
-      // callout lines, which function as in-slide sub-headers, not list
-      // items, and read oddly with a bullet dot in front of them.
-      // [FIX] `bullet: { type: 'bullet' }` silently produces NO bullet at
-      // all in pptxgenjs — confirmed by direct isolated testing against
-      // the actual installed version. Only the boolean form `bullet: true`
-      // correctly emits the bullet character XML. This was the real root
-      // cause of "slides are not bulleted" — even after fixing WHICH items
-      // should get a bullet, the syntax used to request one was wrong.
+      // Everything is bulleted except in-slide sub-headers (noBullet).
+      // Must be the boolean form: pptxgenjs silently ignores { type: 'bullet' }.
       bullet: item.noBullet ? false : true,
       bold:   item.bold   ? true : false,
       fontSize: 15,
@@ -135,26 +114,10 @@ function addBullets(slide, items, opts = {}) {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 //
-// [FIX] Previously flushed to a new slide purely by COUNTING bullet lines
-// (MAX_BULLETS = 5), with zero awareness of how much vertical space those
-// lines actually take. A Worked Example alone typically produces 5+ SHORT
-// lines (its opener/definition, the "⭐ Worked Example" label, "Step 1:",
-// "Step 2:", "Answer:") — each one trivially short, but the flat count cap
-// split them across two slides the moment the COUNT crossed 5, even though
-// all of them together would easily fit in the space actually available.
-//
-// Replaced with an estimate of real rendered space: track how many wrapped
-// text-lines the accumulated bullets are LIKELY to consume (based on
-// character count, not line count), and only flush once that estimate
-// would genuinely overflow the box. This is a heuristic, not a true
-// text-measurement (pptxgenjs has no DOM to measure real wrapped height
-// before rendering) — it deliberately budgets for the NARROWER content
-// width (the "image present" layout, 6.8in) even though a slide without an
-// image gets the full 11.9in width, since at parse time we don't yet know
-// whether an image will end up attached to this specific sub-heading.
-// Budgeting for the tighter case means content might occasionally
-// slightly under-fill a slide when no image ends up present, which is a
-// far better failure mode than overflowing text off the slide when one does.
+// A new slide starts when the accumulated bullets would overflow the text box,
+// estimated from character counts (pptxgenjs can't measure wrapped height).
+// Budgets for the narrower image-present layout (6.8in) because whether an
+// image gets attached isn't known yet; slight under-fill beats overflow.
 const CHARS_PER_LINE_ESTIMATE = 70;   // conservative estimate for the narrower (image-present) 6.8in-wide layout at 15pt
 const MAX_ESTIMATED_LINES = 13;       // budget for the 5.4in-tall bullet box at 15pt font + paragraph spacing
 const MAX_BULLETS_HARD_CAP = 10;      // safety net so one slide never gets absurdly fragment-heavy regardless of estimate

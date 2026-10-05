@@ -1,118 +1,34 @@
 // prompts.js — all LLM prompts for the lesson generator
 //
-// ═══════════════════════════════════════════════════════════════════════════
-// DESIGN PRINCIPLES (v7 — realigned to the approved manual lesson format;
-// v8 — cross-lesson prerequisite awareness + structure-prompt hardening)
-// ═══════════════════════════════════════════════════════════════════════════
+// Generates a Pakistani school maths lesson (SNC 2022 / NCP 2022-23) as a
+// sequence of section prompts, one LLM call each, reproducing the
+// manually-authored reference lessons:
 //
-// This file generates a full Pakistani school math lesson (SNC 2022 / NCP
-// 2022-23 curriculum) as a sequence of section prompts, each calling a local
-// LLM (qwen3:14b via Ollama) once. The section flow and box vocabulary below
-// were rebuilt to exactly match the manually-authored reference lessons
-// (Chapter 7 Geometry, Grade 6) that this pipeline is meant to reproduce:
+//   Title block + "SLOs Covered in This Lesson" (structural, DocBuilder)
+//   -> Introduction
+//   -> Opening Warm-Up (boxed)
+//   -> Concept Building, split into Parts. EVERY Part ends with a mandatory
+//      Your Turn box (questions + highlighted Answer Key) and a Warm-Up box.
+//   -> Mental Maths (boxed)
+//   -> Full "Your Turn" section, two columns A/B (boxed)
+//   -> Practice Questions: Parts A-D + Word Problem box + optional Challenge
+//      box + Answer Key box
+//   -> Key Takeaways (plain bullets)
 //
-//   Title block (structural)
-//   -> "SLOs Covered in This Lesson" (structural)
-//   -> Introduction (LLM)
-//   -> Student Learning Outcomes bullet list (structural)
-//   -> Opening Warm-Up (LLM, boxed)
-//   -> Concept Building, split into Parts (LLM). EVERY Part ends with a
-//     mandatory Your Turn box (questions + highlighted Answer Key) AND a
-//     mandatory Warm-Up box (quick oral check) - not optional extras.
-//   -> Mental Maths (LLM, boxed)
-//   -> Full "Your Turn" section, two columns A/B (LLM, boxed)
-//   -> Practice Questions: Parts A/B/C/D + a Word Problem box + an optional
-//     Challenge box + a full Answer Key box (LLM)
-//   -> Key Takeaways (LLM, plain bullets)
-//
-// v7 changes from the previous version, and why:
-//
-// 1. TEXTBOOK CONTEXT IS NOW A HARD DEPTH CEILING, NOT ADVISORY FLAVOR.
-//    The previous system prompt told the model textbook context was
-//    optional and a mismatch was "never grounds for failure." In practice
-//    this let content drift beyond both the SLO and the textbook's actual
-//    depth (e.g. introducing a named formula or coordinate-algebra method
-//    the source textbook never uses for that topic) while staying nominally
-//    "on-topic" for the SLO's one-line description. SLOs are a single
-//    sentence; they cannot by themselves bound HOW FAR a technique goes.
-//    The textbook chunk is what bounds that. Every prompt and the auditor
-//    now treat supplied textbook context as authoritative for depth,
-//    vocabulary, and technique - not just topic.
-//
-// 2. REPEATING WARM-UP + YOUR TURN AFTER EVERY PART IS NOW STRUCTURAL, NOT
-//    OPTIONAL. The previous "occasional quick-check" instruction is gone.
-//    Every Part in Concept Building MUST close with a boxed Your Turn
-//    (answer key included) and a boxed Warm-Up (short oral check bridging
-//    to the next Part). This is a hard requirement in conceptBuildingPrompt
-//    and is checked by the in-generation self-check block.
-//
-// 3. BOX MARKERS. DocBuilder.js now renders coloured boxes (navy section
-//    bars, teal Warm-Up, purple Your Turn, red Remember/Challenge, teal
-//    Word Problem, green Answer Key) instead of flat paragraphs. Prompts
-//    emit machine-readable markers - [WARMUP_START]...[WARMUP_END],
-//    [YOURTURN_START]...[YOURTURN_END], [REMEMBER_START]...[REMEMBER_END],
-//    [WORDPROBLEM_START]...[WORDPROBLEM_END], [CHALLENGE_START]...
-//    [CHALLENGE_END], [ANSWERKEY_START]...[ANSWERKEY_END] - so DocBuilder
-//    can reliably find box boundaries. These markers are never visible to
-//    students; DocBuilder consumes them and renders the box instead.
-//
-// 4. Pop-Up Quiz is renamed/restructured into the full "Your Turn" section
-//    (two columns, A and B) that sits between Mental Maths and Practice
-//    Questions, matching the approved format exactly. Think Time is
-//    retired as a standalone section - its actual purpose (catching a
-//    likely misconception) now lives as the OPTIONAL Challenge box inside
-//    Practice Questions, used only when it fits within the same textbook
-//    depth ceiling as everything else (never an excuse to go deeper).
-//
-// Everything else - grade-band tone calibration, real-life context variety,
-// cross-section variety tracking, the audit/retry loop, independent answer
-// verification - is kept, because it was already solving real problems
-// unrelated to the structural gap this revision closes.
-//
-// [FIX — grades 7-12] SYSTEM_BASE_TEMPLATE previously only defined distinct
-// tone/complexity bands up to "Grade 5-6" — anything above that fell into
-// the same top band, meaning a Grade 11 student got calibrated identically
-// to a Grade 6 student. This was discovered when ingest.py's grade regex
-// (separately) turned out to be capped at 1-6 too, and the actual scope of
-// this app is Grades 1-12, not primary-only. Added three more bands
-// (7-8, 9-10, 11-12) reflecting the real jump in abstraction, vocabulary,
-// and sentence complexity across secondary school — see the tone table
-// immediately below.
-//
-// v8 CHANGES, AND WHY:
-//
-// 5. CROSS-LESSON PREREQUISITE AWARENESS (chapterProgressBlock, new). Each
-//    lesson's RAG context was scoped only to that lesson's own SLOs, with
-//    zero awareness of what earlier or later lessons IN THE SAME CHAPTER
-//    cover. In practice this produced real forward-references: a lesson
-//    generated early (e.g. "Selecting Appropriate Graphs") would freely use
-//    a term ("continuous data") that a LATER lesson in the same chapter
-//    ("Understanding Data Types") is the one actually responsible for
-//    teaching — usually because a RAG-retrieved textbook chunk mentioned
-//    the term in passing while covering the current lesson's own topic, and
-//    nothing told the model that term belonged to unwritten material.
-//    chapterProgressBlock() gives every section prompt an explicit, ordered
-//    list of this chapter's OTHER lessons — split into "already taught,
-//    safe to build on" and "not yet taught, do not assume the student knows
-//    this" — built from `chapter.lessons`, which server.js now sets once
-//    (structure.lessons) before the generation loop starts. This does not
-//    replace per-lesson SLO scoping (scopeFence still governs WHAT this
-//    lesson may teach); it only prevents an early lesson from silently
-//    assuming knowledge that, in THIS chapter's own planned order, hasn't
-//    been introduced yet.
-//
-// 6. structurePrompt() now explicitly instructs the model to double-check
-//    that every supplied SLO code appears in some lesson's "slos" array
-//    before responding, and to prefer a lesson titled "Miscellaneous" or
-//    folding a stray SLO into the most topically-adjacent existing lesson
-//    over silently dropping it. This is a first line of defense only —
-//    the actual enforcement (parsing the response, diffing SLO codes,
-//    retrying if any are missing) now happens in server.js's /api/structure
-//    handler, since only code can guarantee that check runs; this prompt
-//    change just makes the model less likely to need that retry in the
-//    first place.
-//
-// ═══════════════════════════════════════════════════════════════════════════
+// Design rules every prompt follows:
+//  - Supplied textbook context is a hard DEPTH CEILING, not flavour. An SLO is
+//    one sentence and can't bound how far a technique goes; the textbook can.
+//    The auditor enforces the same rule.
+//  - Boxes are emitted as machine-readable marker pairs ([WARMUP_START] …
+//    [WARMUP_END], YOURTURN, REMEMBER, WORDPROBLEM, CHALLENGE, ANSWERKEY) that
+//    DocBuilder.js turns into coloured boxes; students never see them.
+//  - Tone/complexity is calibrated per grade band (1-2 … 11-12).
+//  - chapterProgressBlock() tells each lesson what earlier lessons taught and
+//    what later ones will, so an early lesson doesn't use a term that a later
+//    lesson in the same chapter is responsible for teaching.
+//  - Scenario/name variety is tracked across a lesson's sections (usedContext).
+//  - structurePrompt asks the model to place every SLO; server.js verifies
+//    coverage and retries, since only code can guarantee that.
 
 
 // ─────────────────────────────────────────────────────────────────
@@ -276,12 +192,6 @@ Never reference a different grade level by number in student-facing text (e.g. d
 grade number: "You already know that..." — never anchor it to a specific earlier grade.`;
 };
 
-// Kept only for any legacy code that imports SYSTEM_BASE directly without a
-// grade. Every prompt function below calls SYSTEM_BASE_TEMPLATE(grade)
-// directly and should NOT use this ungraded fallback — it exists purely so
-// an old import doesn't crash.
-const SYSTEM_BASE = SYSTEM_BASE_TEMPLATE(4);
-
 
 // ─────────────────────────────────────────────────────────────────
 // Cross-section variety tracking
@@ -344,15 +254,11 @@ remains optional, not required (see the note on this in the system instructions 
 
 
 // ─────────────────────────────────────────────────────────────────
-// [NEW v8] chapterProgressBlock() — cross-lesson prerequisite awareness.
+// chapterProgressBlock() — cross-lesson prerequisite awareness.
 //
-// Built from `chapter.lessons`, which server.js now sets once (to the full
-// `structure.lessons` array) before the generation loop starts, so any
-// prompt function that already receives `chapter` — every section prompt
-// does — can build this block without a signature change. Returns '' for
-// a single-lesson chapter (nothing useful to say) or if `chapter.lessons`
-// wasn't populated (keeps this backward-compatible with any caller that
-// hasn't been updated to set it).
+// Built from `chapter.lessons` (set by server.js before generation), so every
+// prompt that already receives `chapter` can use it. Returns '' for a
+// single-lesson chapter or when `chapter.lessons` isn't set.
 // ─────────────────────────────────────────────────────────────────
 function chapterProgressBlock(chapter, currentLessonNumber) {
   const allLessons = chapter && chapter.lessons;
@@ -418,10 +324,8 @@ function stripInternalMarkers(text) {
 
 
 // ─────────────────────────────────────────────────────────────────
-// formatContext() — RAG context, split into current-grade material and an
-// optional prior-knowledge "bridge". Current-grade chunks now render with
-// EXPLICIT ceiling language instead of the previous "ignore it completely
-// if it doesn't match" framing.
+// formatContext() — RAG context, split into current-grade material (rendered
+// with explicit depth-ceiling language) and an optional prior-grade "bridge".
 // ─────────────────────────────────────────────────────────────────
 function formatContext(contextChunks) {
   if (!contextChunks || !contextChunks.length) return '';
@@ -1390,7 +1294,7 @@ module.exports = {
   structurePrompt,
   warmUpPrompt,
   conceptBuildingPrompt,
-  yourTurnFullPrompt,           // NEW (v7) — replaces popUpQuizPrompt; full two-column Your Turn section
+  yourTurnFullPrompt,
   mentalMathsPrompt,
   practiceQuestionsPrompt,
   keyTakeawaysPrompt,
@@ -1408,5 +1312,5 @@ module.exports = {
   extractVisualDescription,
   extractConceptHighlights,
   answerVerificationPrompt,
-  chapterProgressBlock,         // NEW (v8)
+  chapterProgressBlock,
 };

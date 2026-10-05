@@ -12,6 +12,9 @@ from chromadb.utils import embedding_functions
 # Set default embedding function (uses all-MiniLM-L6-v2)
 DEFAULT_EF = embedding_functions.DefaultEmbeddingFunction()
 
+# Paths resolve from this file, not the caller's working directory
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def parse_filename_metadata(filename):
     """
     Tries to guess Grade and Subject from the filename.
@@ -21,15 +24,8 @@ def parse_filename_metadata(filename):
     - 'Grade10_Maths.pdf' -> grade=10, subject='Mathematics'
     - 'Grade07_Science.pdf' -> grade=7, subject='Science' (zero-padded)
 
-    [FIX] Previously capped at [1-6] (NCP 2022-23 primary strand only) — the
-    actual scope of this app is Grades 1-12, so a genuine Grade 7-12
-    textbook filename was silently unable to match at all and fell through
-    to the grade=4 default, mislabeling secondary-school content as a
-    primary-grade default. Widened to 1-12, matching either a bare "10"/
-    "11"/"12" OR a zero-padded single digit ("01".."09") so both common
-    filename conventions parse correctly. The trailing negative lookahead
-    (?!\\d) still guards against a 3+ digit run (e.g. "Grade123") being
-    misread as a valid grade prefix.
+    Grades 1-12, bare or zero-padded; the (?!\\d) lookahead stops a 3+ digit
+    run (e.g. "Grade123") from matching.
     """
     name_lower = filename.lower()
 
@@ -39,12 +35,7 @@ def parse_filename_metadata(filename):
     if grade_match:
         grade = int(grade_match.group(1))
     else:
-        # [FIX] Previously defaulted silently to grade=4 with no warning,
-        # which is exactly how a Grade 1/2 file would get mistagged without
-        # anyone noticing. Now this is loud in the ingestion log, and the
-        # default is applied explicitly (not implicitly via an unreachable
-        # branch) so it's a visible, deliberate fallback rather than a
-        # symptom of the regex being unable to represent certain grades.
+        # Loud on purpose: a silent default is how files get mistagged.
         grade = 4
         print(f"[!] WARNING: Could not detect grade from filename '{filename}'. "
               f"Defaulting to Grade {grade} — VERIFY THIS FILE'S ACTUAL GRADE and "
@@ -149,7 +140,8 @@ def ingest_pdf(file_path, collection, force_ocr=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Ingest textbook PDFs into ChromaDB.")
-    parser.add_argument("--dir", default="./textbooks", help="Directory containing PDFs (default: ./textbooks)")
+    parser.add_argument("--dir", default=os.path.join(PROJECT_DIR, "textbooks"),
+                        help="Directory containing PDFs (default: ./textbooks next to this script)")
     parser.add_argument("--force-ocr", action="store_true", help="Force OCR on all pages")
     args = parser.parse_args()
     
@@ -166,7 +158,7 @@ def main():
     print(f"[*] Found {len(pdf_files)} PDFs to process.")
     
     # Initialize ChromaDB
-    db_path = "./chroma_db"
+    db_path = os.path.join(PROJECT_DIR, "chroma_db")  # must match query_kb.py
     print(f"[*] Opening ChromaDB at {db_path}...")
     try:
         client = chromadb.PersistentClient(path=db_path)

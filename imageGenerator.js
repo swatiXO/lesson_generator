@@ -1,102 +1,112 @@
 // imageGenerator.js — handles SVG generation and web image search fallback via Puppeteer
+require('./env');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const { generate, generateFast } = require('./ollama');
-const { getChromePath } = require('./puppeteerHelper');
+const { withPage } = require('./puppeteerHelper');
 const { imageSearchQueryPrompt } = require('./prompts');
 
-require('./env');
-// Dynamically import puppeteer since it's installed via npm
-let puppeteer;
-try {
-  puppeteer = require('puppeteer');
-} catch (e) {
-  console.warn('[imageGenerator] Puppeteer not loaded yet. Make sure to install dependencies.');
-}
+const TEMP_DIR = path.join(__dirname, 'public', 'images_temp');
+const DOWNLOAD_TIMEOUT_MS = 20000;
+const MAX_REDIRECTS = 5;
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 /**
- * Downloads a file from a URL to a local destination
+ * Downloads an image from a URL to a local destination. Follows redirects and
+ * rejects non-image responses (hotlink-protection HTML pages etc.), so the
+ * caller moves on to the next candidate instead of saving a broken file.
  */
-async function downloadImage(url, destPath) {
+function downloadImage(url, destPath, redirectsLeft = MAX_REDIRECTS) {
   return new Promise((resolve, reject) => {
-    // If Unsplash source URL or standard URL
-    const client = url.startsWith('https') ? require('https') : require('http');
-
-    // Set user-agent header to look like a browser
-    const options = {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    const client = url.startsWith('https') ? https : http;
+    const req = client.get(url, { headers: { 'User-Agent': BROWSER_UA } }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) return reject(new Error('Too many redirects'));
+        const next = new URL(res.headers.location, url).toString();
+        return downloadImage(next, destPath, redirectsLeft - 1).then(resolve, reject);
       }
-    };
-
-    client.get(url, options, (res) => {
       if (res.statusCode !== 200) {
-        // Handle redirect
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          return downloadImage(res.headers.location, destPath).then(resolve).catch(reject);
-        }
+        res.resume();
         return reject(new Error(`Failed to download image. Status: ${res.statusCode}`));
+      }
+      const type = res.headers['content-type'] || '';
+      if (type && !type.startsWith('image/')) {
+        res.resume();
+        return reject(new Error(`Not an image (content-type: ${type})`));
       }
 
       const fileStream = fs.createWriteStream(destPath);
       res.pipe(fileStream);
-
-      fileStream.on('finish', () => {
-        fileStream.close();
-        resolve();
-      });
-
+      fileStream.on('finish', () => fileStream.close(() => resolve()));
       fileStream.on('error', (err) => {
         fs.unlink(destPath, () => {});
         reject(err);
       });
-    }).on('error', reject);
+    });
+    req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => req.destroy(new Error('ETIMEDOUT')));
+    req.on('error', reject);
   });
 }
 
 /**
- * Calls Ollama vision model to verify if image matches concept
+ * Finds a vision model (minicpm-v / llava) on a LOCAL Ollama, if one is running.
+ */
+function findVisionModel() {
+  return new Promise((resolve) => {
+    const req = http.get({ hostname: 'localhost', port: 11434, path: '/api/tags' }, (res) => {
+      let data = '';
+      res.on('data', c => { data += c; });
+      res.on('end', () => {
+        try {
+          const models = JSON.parse(data).models?.map(m => m.name) || [];
+          resolve(models.find(m => m.includes('minicpm-v') || m.includes('llava')) || null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    req.setTimeout(3000, () => req.destroy());
+    req.on('error', () => resolve(null));
+  });
+}
+
+/**
+ * Asks a local vision model whether the image depicts the concept.
+ * Any failure (or no vision model) counts as a pass.
  */
 async function verifyImageWithVision(imagePath, concept) {
   try {
-    // Read local image and encode in base64
-    const imgBuffer = fs.readFileSync(imagePath);
-    const base64Img = imgBuffer.toString('base64');
-
-    // Check if a vision model exists (e.g. minicpm-v, llava)
     const visionModel = await findVisionModel();
     if (!visionModel) {
       console.log('[imageGenerator] No vision model found in Ollama, skipping verification.');
-      return true; // fallback to true
+      return true;
     }
 
     console.log(`[imageGenerator] Verifying image against concept "${concept}" using ${visionModel}...`);
-
     const body = JSON.stringify({
       model: visionModel,
       stream: false,
       options: { temperature: 0.1 },
-      messages: [
-        {
-          role: 'user',
-          content: `Does this image depict or represent "${concept}"? Respond with only the word "yes" or "no".`,
-          images: [base64Img]
-        }
-      ]
+      messages: [{
+        role: 'user',
+        content: `Does this image depict or represent "${concept}"? Respond with only the word "yes" or "no".`,
+        images: [fs.readFileSync(imagePath).toString('base64')],
+      }],
     });
 
-    return new Promise((resolve) => {
+    return await new Promise((resolve) => {
       const req = http.request(
         { hostname: 'localhost', port: 11434, path: '/api/chat', method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
         (res) => {
           let data = '';
-          res.on('data', c => data += c);
+          res.on('data', c => { data += c; });
           res.on('end', () => {
             try {
-              const json = JSON.parse(data);
-              const answer = json.message?.content?.toLowerCase() || '';
+              const answer = JSON.parse(data).message?.content?.toLowerCase() || '';
               const matches = answer.includes('yes');
               console.log(`[imageGenerator] Vision model verification result: ${matches} (Response: "${answer.trim()}")`);
               resolve(matches);
@@ -112,131 +122,72 @@ async function verifyImageWithVision(imagePath, concept) {
     });
   } catch (err) {
     console.error('[imageGenerator] Vision verification error:', err.message);
-    return true; // skip on error
+    return true;
   }
 }
 
-/**
- * Helper to find available vision models in Ollama
- */
-async function findVisionModel() {
-  return new Promise((resolve) => {
-    http.get({ hostname: 'localhost', port: 11434, path: '/api/tags' }, (res) => {
+function getJson(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, options, (res) => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return reject(new Error(`returned status code ${res.statusCode}`));
+      }
       let data = '';
-      res.on('data', c => data += c);
+      res.on('data', chunk => { data += chunk; });
       res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          const models = json.models?.map(m => m.name) || [];
-          // Look for minicpm-v or llava
-          const found = models.find(m => m.includes('minicpm-v') || m.includes('llava'));
-          resolve(found || null);
-        } catch {
-          resolve(null);
-        }
+        try { resolve(JSON.parse(data)); } catch (err) { reject(err); }
       });
-    }).on('error', () => resolve(null));
+    });
+    req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => req.destroy(new Error('ETIMEDOUT')));
+    req.on('error', reject);
   });
 }
 
 /**
- * Uses Google Custom Search JSON API (preferred) or Openverse API (fallback)
- * to find the top image candidates matching the query.
- * Returns an array of { type: 'url', url } candidates, best match first.
+ * Finds image candidates via Google Custom Search (if GOOGLE_API_KEY/GOOGLE_CX
+ * are set) or Openverse. Returns [{ type: 'url', url, title }], best match first.
  */
 async function searchWebImage(query, maxResults = 5) {
-  const https = require('https');
-
   const apiKey = process.env.GOOGLE_API_KEY;
   const cx = process.env.GOOGLE_CX;
 
   if (apiKey && cx) {
-    // ─── Route A: Google Custom Search API ───
-    return new Promise((resolve, reject) => {
-      const url = `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(query)}&searchType=image&key=${apiKey}&cx=${cx}&num=${maxResults}`;
-      console.log(`[imageGenerator] Querying Google Custom Search API for: "${query}"`);
-
-      https.get(url, (res) => {
-        if (res.statusCode !== 200) {
-          return reject(new Error(`Google API returned status code ${res.statusCode}`));
-        }
-
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            if (json.error) {
-              return reject(new Error(json.error.message));
-            }
-            if (!json.items || !json.items.length) {
-              return reject(new Error('No results found on Google.'));
-            }
-            const candidates = json.items.map(item => ({ type: 'url', url: item.link, title: item.title }));
-            console.log(`[imageGenerator] Found ${candidates.length} Google image candidate(s) for "${query}"`);
-            resolve(candidates);
-          } catch (err) {
-            reject(err);
-          }
-        });
-      }).on('error', reject);
-    });
-  } else {
-    // ─── Route B: Openverse API (Fallback) ───
-    return new Promise((resolve, reject) => {
-      const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${maxResults}`;
-      console.log(`[imageGenerator] Querying Openverse API (fallback) for: "${query}"`);
-
-      const options = {
-        headers: {
-          'User-Agent': 'LessonPlanGeneratorBot/1.0 (contact: support@mediatiz.com) Node.js/https'
-        }
-      };
-
-      https.get(url, options, (res) => {
-        if (res.statusCode !== 200) {
-          return reject(new Error(`Openverse API returned status code ${res.statusCode}`));
-        }
-
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try {
-            const json = JSON.parse(data);
-            if (!json.results || !json.results.length) {
-              return reject(new Error('No results found on Openverse.'));
-            }
-            const candidates = json.results.map(result => ({ type: 'url', url: result.url, title: result.title }));
-            console.log(`[imageGenerator] Found ${candidates.length} Openverse image candidate(s) for "${query}"`);
-            resolve(candidates);
-          } catch (err) {
-            reject(err);
-          }
-        });
-      }).on('error', reject);
-    });
+    console.log(`[imageGenerator] Querying Google Custom Search API for: "${query}"`);
+    const url = `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(query)}&searchType=image&key=${apiKey}&cx=${cx}&num=${maxResults}`;
+    let json;
+    try {
+      json = await getJson(url);
+    } catch (err) {
+      throw new Error(`Google API ${err.message}`);
+    }
+    if (json.error) throw new Error(json.error.message);
+    if (!json.items?.length) throw new Error('No results found on Google.');
+    const candidates = json.items.map(item => ({ type: 'url', url: item.link, title: item.title }));
+    console.log(`[imageGenerator] Found ${candidates.length} Google image candidate(s) for "${query}"`);
+    return candidates;
   }
+
+  console.log(`[imageGenerator] Querying Openverse API (fallback) for: "${query}"`);
+  const url = `https://api.openverse.org/v1/images/?q=${encodeURIComponent(query)}&page_size=${maxResults}`;
+  let json;
+  try {
+    json = await getJson(url, { headers: { 'User-Agent': 'LessonPlanGeneratorBot/1.0 (contact: support@mediatiz.com) Node.js/https' } });
+  } catch (err) {
+    throw new Error(`Openverse API ${err.message}`);
+  }
+  if (!json.results?.length) throw new Error('No results found on Openverse.');
+  const candidates = json.results.map(result => ({ type: 'url', url: result.url, title: result.title }));
+  console.log(`[imageGenerator] Found ${candidates.length} Openverse image candidate(s) for "${query}"`);
+  return candidates;
 }
 
 /**
- * Converts an SVG string into a PNG file using Puppeteer
+ * Renders an SVG string to a PNG file (2x resolution, transparent background).
  */
 async function renderSvgToPng(svgString, destPngPath) {
-  if (!puppeteer) throw new Error('Puppeteer is not installed.');
-
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      headless: true,
-      executablePath: getChromePath(),
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-
-    const page = await browser.newPage();
-
-    // Wrap SVG in a minimal HTML container
-    const htmlContent = `
-      <!DOCTYPE html>
+  await withPage(async (page) => {
+    await page.setContent(`<!DOCTYPE html>
       <html>
       <head>
         <style>
@@ -244,69 +195,26 @@ async function renderSvgToPng(svgString, destPngPath) {
           svg { display: block; }
         </style>
       </head>
-      <body>
-        ${svgString}
-      </body>
-      </html>
-    `;
+      <body>${svgString}</body>
+      </html>`);
 
-    await page.setContent(htmlContent);
-
-    // Get the dimensions of the SVG element
     const rect = await page.evaluate(() => {
       const svg = document.querySelector('svg');
       if (!svg) return { x: 0, y: 0, width: 400, height: 200 };
       const bbox = svg.getBoundingClientRect();
-      return {
-        x: bbox.left,
-        y: bbox.top,
-        width: bbox.width || 400,
-        height: bbox.height || 200
-      };
+      return { x: bbox.left, y: bbox.top, width: bbox.width || 400, height: bbox.height || 200 };
     });
 
-    await page.setViewport({
-      width: Math.ceil(rect.width),
-      height: Math.ceil(rect.height),
-      deviceScaleFactor: 2 // high resolution
-    });
-
-    // Take screenshot of the element
-    await page.screenshot({
-      path: destPngPath,
-      clip: {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height
-      },
-      omitBackground: true
-    });
-
-    console.log(`[imageGenerator] Successfully rendered SVG to PNG: ${destPngPath}`);
-    await browser.close();
-
-  } catch (err) {
-    if (browser) await browser.close();
-    throw err;
-  }
+    await page.setViewport({ width: Math.ceil(rect.width), height: Math.ceil(rect.height), deviceScaleFactor: 2 });
+    await page.screenshot({ path: destPngPath, clip: rect, omitBackground: true });
+  });
+  console.log(`[imageGenerator] Successfully rendered SVG to PNG: ${destPngPath}`);
 }
 
-// ─────────────────────────────────────────────────────────────────
-// [FIX v2] Diagram routing
-//
-// Geometric/structural math concepts (number lines, points, rays, shapes,
-// place-value grids, axes, etc.) are not things a stock photo or web image
-// search can meaningfully depict — no photograph shows "a ray," and search
-// engines return irrelevant stock imagery for these queries (which is also
-// why they were burning API quota on searches that could never succeed).
-// isDiagramContent() flags this content so generateImageForSection() can
-// route it straight to generateSvgDiagram() below instead of searching.
-//
-// Keywords are deliberately specific (e.g. "point a" / "endpoint" rather
-// than bare "point") to avoid false positives on ordinary sentences like
-// "at this point in the lesson."
-// ─────────────────────────────────────────────────────────────────
+// Geometric/structural concepts (number lines, rays, shapes, place-value grids…)
+// can't be found as stock photos, so they're drawn as SVG diagrams instead of
+// burning search quota. Keywords are deliberately specific ("point a", not
+// "point") to avoid matching ordinary prose like "at this point".
 const DIAGRAM_KEYWORDS = [
   'number line', 'line segment', ' ray ', ' rays', 'endpoint', 'point a', 'point b',
   'coordinate', 'protractor', 'venn diagram', 'place value chart', 'place value grid',
@@ -318,17 +226,11 @@ const DIAGRAM_KEYWORDS = [
 
 function isDiagramContent(text) {
   if (!text) return false;
-  const lower = ` ${text.toLowerCase()} `; // pad so " ray " etc. can match at string edges
+  const lower = ` ${text.toLowerCase()} `; // pad so " ray " can match at the edges
   return DIAGRAM_KEYWORDS.some(kw => lower.includes(kw));
 }
 
-/**
- * Generates an SVG concept diagram using Ollama
- */
-async function generateSvgDiagram(conceptText) {
-  console.log('[imageGenerator] Requesting LLM to write SVG code...');
-
-  const systemPrompt = `You are a professional SVG generator.
+const SVG_SYSTEM_PROMPT = `You are a professional SVG generator.
 You generate valid, clean SVG illustrations for school mathematics concepts.
 You respond ONLY with raw SVG code starting with <svg> and ending with </svg>.
 Do NOT wrap the SVG in markdown code blocks (e.g. do NOT write \`\`\`xml or \`\`\`svg).
@@ -353,50 +255,40 @@ LAYOUT RULES (critical — text overlapping shapes is the most common failure in
 - Never place two text elements, or a text element and a shape, at overlapping coordinates.
   Leave at least 10-15px of clear space around every label.`;
 
+const escapeXml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Asks the model to write an SVG diagram for the concept.
+ */
+async function generateSvgDiagram(conceptText) {
+  console.log('[imageGenerator] Requesting LLM to write SVG code...');
+
   const userPrompt = `Generate a diagram showing: "${conceptText}"
 Ensure the diagram is clear, accurate, and helpful for primary school students.
 Use lines, shapes, grids, place value columns, or number lines. Add labels to clarify the concept.`;
 
-  let svg = await generate(systemPrompt, userPrompt);
-
-  // Clean up code blocks if LLM failed to follow the instruction
+  let svg = await generate(SVG_SYSTEM_PROMPT, userPrompt);
   svg = svg.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/i, '').trim();
 
-  // Verify it contains <svg>
   if (!svg.startsWith('<svg')) {
     const match = svg.match(/<svg[\s\S]*<\/svg>/);
-    if (match) {
-      svg = match[0];
-    } else {
-      // Minimal fallback SVG
-      svg = `<svg width="400" height="200" viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
+    svg = match ? match[0] : `<svg width="400" height="200" viewBox="0 0 400 200" xmlns="http://www.w3.org/2000/svg">
         <rect width="100%" height="100%" fill="#F8F9FA" rx="8"/>
-        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="16" fill="#1F5C99">${conceptText}</text>
+        <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="16" fill="#1F5C99">${escapeXml(conceptText)}</text>
       </svg>`;
-    }
   }
-
   return svg;
 }
 
 /**
- * Builds a placeholder SVG shown when image search/download fails, or the
- * vision model rejects every candidate. Embeds the ACTUAL search query that
- * was used, so a human reviewing the output later (a course designer) knows
- * exactly what to search for manually instead of guessing from the section
- * name alone. If no query was ever generated (failure happened before that
- * step), falls back to a generic "add manually" message.
+ * Placeholder shown when no usable image was found. Embeds the search query
+ * that was tried, so a course designer knows what to look for manually.
  */
 function buildPlaceholderSvg(sectionName, query) {
-  const escape = (s) => String(s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  // Simple word-wrap so long queries don't run off the edge of the box
   const wrapText = (text, maxCharsPerLine = 38) => {
-    const words = text.split(' ');
     const lines = [];
     let cur = '';
-    for (const w of words) {
+    for (const w of text.split(' ')) {
       if ((cur + ' ' + w).trim().length > maxCharsPerLine) {
         if (cur) lines.push(cur.trim());
         cur = w;
@@ -405,7 +297,7 @@ function buildPlaceholderSvg(sectionName, query) {
       }
     }
     if (cur) lines.push(cur.trim());
-    return lines.slice(0, 3); // cap at 3 lines to keep the box readable
+    return lines.slice(0, 3);
   };
 
   const queryLines = query
@@ -415,169 +307,118 @@ function buildPlaceholderSvg(sectionName, query) {
   const lineHeight = 18;
   const startY = 110 - ((queryLines.length - 1) * lineHeight) / 2;
   const textLines = queryLines
-    .map((line, i) => `<text x="50%" y="${startY + i * lineHeight}" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="13" fill="#1F5C99" font-style="italic">${escape(line)}</text>`)
+    .map((line, i) => `<text x="50%" y="${startY + i * lineHeight}" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="13" fill="#1F5C99" font-style="italic">${escapeXml(line)}</text>`)
     .join('\n    ');
 
   return `<svg width="400" height="220" viewBox="0 0 400 220" xmlns="http://www.w3.org/2000/svg">
     <rect width="100%" height="100%" fill="#F8F9FA" rx="8" stroke="#1F5C99" stroke-width="2"/>
-    <text x="50%" y="70" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="13" fill="#333333">🖼️ Image placeholder — ${escape(sectionName)}</text>
+    <text x="50%" y="70" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="13" fill="#333333">🖼️ Image placeholder — ${escapeXml(sectionName)}</text>
     ${textLines}
   </svg>`;
 }
 
+const isTransientNetworkError = (err) =>
+  /ECONNRESET|decryption failed|bad record mac|socket hang up|EPIPE|ETIMEDOUT/i.test(err.message || '');
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 /**
- * Main function: attempts to create an image for a section.
- * Classifies, generates (SVG or Web Search), verifies, and returns the local
- * file path along with the search query used (so callers can surface it as
- * a caption/note when a placeholder was used instead of a real image).
- *
- * Return shape:
- *   { path: string|null, query: string|null, isPlaceholder: boolean, source: 'websearch'|'svg_diagram'|'placeholder' }
- * `source` tells the caller exactly how this image was produced, so a doc
- * builder can decide whether it needs a visible "please verify" caption:
- *   - 'websearch'   — a real, vision-verified photo. No caption needed.
- *   - 'svg_diagram' — an AI-generated diagram (e.g. for geometric content
- *                     routed away from web search). A real image, but not
- *                     verified against ground truth — caption recommended.
- *   - 'placeholder' — web search found nothing usable at all. isPlaceholder
- *                     is also true in this case; caption shows the query.
- *
- * @param {boolean} disableSvgDiagrams - when true, skips the LLM-generated-
- *   SVG-diagram path entirely (the most expensive step in this pipeline —
- *   a full LLM call plus a Puppeteer render) and falls through to the
- *   normal web-search/placeholder flow instead, even for content that
- *   would otherwise be classified as diagram content.
+ * Tries each candidate in order until one downloads; transient network/TLS
+ * errors (often antivirus HTTPS scanning on Windows) get one same-URL retry.
  */
-async function generateImageForSection(sectionName, sectionContent, grade, subject = 'Mathematics', disableVerification = false, disableSvgDiagrams = false) {
-  // Ensure a temp directory exists
-  const tempDir = path.join(__dirname, 'public', 'images_temp');
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
+async function downloadFirstCandidate(candidates, destPngPath) {
+  let lastErr = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const maxAttempts = candidate.type === 'base64' ? 1 : 2;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (candidate.type === 'base64') {
+          const base64Data = candidate.data.replace(/^data:image\/\w+;base64,/, '');
+          fs.writeFileSync(destPngPath, Buffer.from(base64Data, 'base64'));
+          console.log(`[imageGenerator] Saved base64 image (candidate ${i + 1}/${candidates.length}): ${destPngPath}`);
+        } else {
+          await downloadImage(candidate.url, destPngPath);
+          console.log(`[imageGenerator] Downloaded image (candidate ${i + 1}/${candidates.length}, attempt ${attempt}): ${destPngPath}`);
+        }
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < maxAttempts && isTransientNetworkError(err)) {
+          console.warn(`[imageGenerator] Candidate ${i + 1}/${candidates.length} hit a transient network/TLS error ("${err.message}") — retrying same URL once...`);
+          await sleep(500);
+        } else {
+          console.warn(`[imageGenerator] Candidate ${i + 1}/${candidates.length} failed ("${candidate.url}"): ${err.message}. Trying next...`);
+          break;
+        }
+      }
+    }
   }
 
-  const timestamp = Date.now();
-  const baseFilename = `section_${sectionName.replace(/\s+/g, '_')}_${timestamp}`;
-  const destPngPath = path.join(tempDir, `${baseFilename}.png`);
+  const finalErr = lastErr || new Error('All image candidates failed to download.');
+  if (isTransientNetworkError(finalErr)) {
+    console.error(`[imageGenerator] All ${candidates.length} candidates failed with network/TLS errors even after retries. ` +
+      `This usually means something is intercepting HTTPS — check antivirus "HTTPS scanning"/web-shield settings or a VPN/proxy.`);
+  }
+  throw finalErr;
+}
 
-  // Hoisted OUTSIDE the try block on purpose — this fixes a bug where `query`
-  // was declared with `const` inside try, so if searchWebImage/downloadImage
-  // threw, the catch block below had no access to it and the placeholder
-  // could never show the search term that actually failed.
-  let query = null;
+/**
+ * Creates an image for a section: an SVG diagram for geometric content,
+ * otherwise a (vision-verified) web image, otherwise a placeholder.
+ *
+ * Returns { path, query, isPlaceholder, source } where source is
+ *   'websearch'   — a real photo (vision-verified if a vision model exists)
+ *   'svg_diagram' — an AI-drawn diagram; real but unverified, caption recommended
+ *   'placeholder' — nothing usable found; the caption shows the query
+ *
+ * disableSvgDiagrams skips the diagram path (an LLM call plus a render, the most
+ * expensive step here) and treats diagram content like any other.
+ */
+async function generateImageForSection(sectionName, sectionContent, grade, subject = 'Mathematics', disableVerification = false, disableSvgDiagrams = false) {
+  fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-  // [FIX v2] Diagram routing — geometric/structural content skips web search
-  // entirely and goes straight to an LLM-generated SVG diagram, which is
-  // actually a better fit for this content AND avoids burning search-API
-  // quota on queries that were never going to return something usable.
-  //
-  // [NEW] disableSvgDiagrams — this path is genuinely the most expensive
-  // step in the whole image pipeline (a full LLM call to write SVG code,
-  // then a Puppeteer render), so it's worth being able to turn off entirely
-  // when generation speed matters more than diagram quality for a given
-  // run. When disabled, diagram-classified content simply falls through to
-  // the exact same web-search → placeholder flow used for everything else
-  // — no separate "skip images" branch, it just behaves as if
-  // isDiagramContent() had returned false.
-  if (!disableSvgDiagrams && isDiagramContent(sectionContent)) {
-    try {
-      console.log(`[imageGenerator] "${sectionName}" classified as diagram content — generating SVG directly (skipping web image search).`);
-      const svg = await generateSvgDiagram(sectionContent.slice(0, 500));
-      await renderSvgToPng(svg, destPngPath);
-      return { path: `/images_temp/${baseFilename}.png`, query: null, isPlaceholder: false, source: 'svg_diagram' };
-    } catch (err) {
-      console.error(`[imageGenerator] Diagram generation failed for ${sectionName}, falling back to web search:`, err.message);
-      // Fall through to the web-search path below rather than giving up —
-      // a real photo/diagram from search is still better than nothing.
+  const baseFilename = `section_${sectionName.replace(/\s+/g, '_')}_${Date.now()}`;
+  const destPngPath = path.join(TEMP_DIR, `${baseFilename}.png`);
+  const webPath = `/images_temp/${baseFilename}.png`;
+  let query = null; // outside try so the placeholder can show the query that failed
+
+  const placeholder = async () => {
+    await renderSvgToPng(buildPlaceholderSvg(sectionName, query), destPngPath);
+    return { path: webPath, query, isPlaceholder: true, source: 'placeholder' };
+  };
+
+  if (isDiagramContent(sectionContent)) {
+    if (disableSvgDiagrams) {
+      console.log(`[imageGenerator] "${sectionName}" is diagram content, but SVG diagrams are disabled for this run — using web search.`);
+    } else {
+      try {
+        console.log(`[imageGenerator] "${sectionName}" classified as diagram content — generating SVG directly (skipping web image search).`);
+        const svg = await generateSvgDiagram(sectionContent.slice(0, 500));
+        await renderSvgToPng(svg, destPngPath);
+        return { path: webPath, query: null, isPlaceholder: false, source: 'svg_diagram' };
+      } catch (err) {
+        console.error(`[imageGenerator] Diagram generation failed for ${sectionName}, falling back to web search:`, err.message);
+      }
     }
-  } else if (disableSvgDiagrams && isDiagramContent(sectionContent)) {
-    console.log(`[imageGenerator] "${sectionName}" would have been classified as diagram content, but SVG diagram generation is disabled for this run — falling through to web search.`);
   }
 
   try {
-    // 1. Generate a search query for web images (every section now gets an
-    //    image — no longer gated behind a "does this need a visual?" step).
-    const { system: querySystem, user: queryUser } = imageSearchQueryPrompt(
-      sectionContent.slice(0, 600),
-      `${subject} — ${sectionName}`,
-      grade
-    );
-    query = (await generate(querySystem, queryUser)).replace(/"/g, '').trim();
+    const { system, user } = imageSearchQueryPrompt(sectionContent.slice(0, 600), `${subject} — ${sectionName}`, grade);
+    query = (await generateFast(system, user)).replace(/"/g, '').trim();
     console.log(`[imageGenerator] Generated search query: "${query}"`);
 
-    // 2. Search the web and try each candidate image until one downloads successfully
     const candidates = await searchWebImage(query, 5);
+    await downloadFirstCandidate(candidates, destPngPath);
 
-    let downloaded = false;
-    let lastErr = null;
-
-    // Errors like this are transient network/TLS corruption (a dropped or
-    // mangled connection mid-download — often caused by antivirus HTTPS
-    // scanning/interception on Windows) rather than a bad URL, so a same-URL
-    // retry after a short pause is worth trying before giving up on it.
-    const isTransientNetworkError = (err) =>
-      /ECONNRESET|decryption failed|bad record mac|socket hang up|EPIPE|ETIMEDOUT/i.test(err.message || '');
-    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-    for (let i = 0; i < candidates.length; i++) {
-      const candidate = candidates[i];
-      let attempt = 0;
-      const maxAttempts = candidate.type === 'base64' ? 1 : 2; // only network downloads benefit from a retry
-      while (attempt < maxAttempts && !downloaded) {
-        attempt++;
-        try {
-          if (candidate.type === 'base64') {
-            const base64Data = candidate.data.replace(/^data:image\/\w+;base64,/, '');
-            fs.writeFileSync(destPngPath, Buffer.from(base64Data, 'base64'));
-            console.log(`[imageGenerator] Saved base64 image (candidate ${i + 1}/${candidates.length}): ${destPngPath}`);
-          } else {
-            await downloadImage(candidate.url, destPngPath);
-            console.log(`[imageGenerator] Downloaded image (candidate ${i + 1}/${candidates.length}, attempt ${attempt}): ${destPngPath}`);
-          }
-          downloaded = true;
-        } catch (err) {
-          lastErr = err;
-          if (attempt < maxAttempts && isTransientNetworkError(err)) {
-            console.warn(`[imageGenerator] Candidate ${i + 1}/${candidates.length} hit a transient network/TLS error ("${err.message}") — retrying same URL once...`);
-            await sleep(500);
-          } else {
-            console.warn(`[imageGenerator] Candidate ${i + 1}/${candidates.length} failed ("${candidate.url}"): ${err.message}. Trying next...`);
-          }
-        }
-      }
-      if (downloaded) break;
+    if (!disableVerification && !(await verifyImageWithVision(destPngPath, query))) {
+      console.warn('[imageGenerator] Image failed vision verification. Falling back to placeholder with search query.');
+      return await placeholder();
     }
-
-    if (!downloaded) {
-      const finalErr = lastErr || new Error('All image candidates failed to download.');
-      if (isTransientNetworkError(finalErr)) {
-        console.error(`[imageGenerator] All ${candidates.length} candidates failed with network/TLS errors even after retries. ` +
-          `This pattern (SSL decryption/ECONNRESET) usually means something is intercepting or corrupting HTTPS connections — ` +
-          `check antivirus "HTTPS scanning"/web-shield settings or a VPN/proxy, then falling back to placeholder graphic.`);
-      }
-      throw finalErr;
-    }
-
-    // 3. Vision model verification (if enabled)
-    if (!disableVerification) {
-      const ok = await verifyImageWithVision(destPngPath, query);
-      if (!ok) {
-        console.warn('[imageGenerator] Image failed vision verification. Falling back to placeholder with search query.');
-        const fallbackSvg = buildPlaceholderSvg(sectionName, query);
-        await renderSvgToPng(fallbackSvg, destPngPath);
-        return { path: `/images_temp/${baseFilename}.png`, query, isPlaceholder: true, source: 'placeholder' };
-      }
-    }
-
-    return { path: `/images_temp/${baseFilename}.png`, query, isPlaceholder: false, source: 'websearch' };
-
+    return { path: webPath, query, isPlaceholder: false, source: 'websearch' };
   } catch (err) {
     console.error(`[imageGenerator] Failed to generate image for ${sectionName}:`, err.message);
-    // Graceful fallback to a placeholder that shows the search query, so a
-    // course designer can add the image manually without re-deriving it.
     try {
-      const fallbackSvg = buildPlaceholderSvg(sectionName, query);
-      await renderSvgToPng(fallbackSvg, destPngPath);
-      return { path: `/images_temp/${baseFilename}.png`, query, isPlaceholder: true, source: 'placeholder' };
+      return await placeholder();
     } catch (_) {
       return { path: null, query, isPlaceholder: true, source: 'placeholder' };
     }

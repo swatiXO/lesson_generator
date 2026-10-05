@@ -837,13 +837,8 @@ function buildProgressUI(lessons) {
     const chips = document.createElement('div');
     chips.className = 'section-chips';
 
-    // [FIX] Matches the current v7 backend sectionDefs exactly:
-    // 'examples' was merged into conceptBuilding (inline worked examples,
-    // no longer a separate step), and 'popUpQuiz' was replaced by
-    // 'yourTurnFull' (the consolidated two-column Your Turn section). A
-    // stale list here means these chips never receive their
-    // section_start/section_done events at all — not a cosmetic mismatch,
-    // the whole progress UI silently stops updating for any lesson.
+    // Must match server.js's sectionDefs keys (see sections.js) — a stale key
+    // means that chip never receives its progress events.
     const sections = ['Introduction', 'Warm-Up', 'Concept Building', 'Mental Maths', 'Your Turn', 'Practice Questions', 'Key Takeaways', 'Video Script'];
     const sectionKeys = ['introduction', 'warmUp', 'conceptBuilding', 'mentalMaths', 'yourTurnFull', 'practiceQuestions', 'keyTakeaways', 'videoScript'];
 
@@ -929,10 +924,7 @@ function listenToGeneration() {
       logContainer.scrollTop = logContainer.scrollHeight;
     }
 
-    // [NEW] The backend already emits this event (server.js's Tier-1 answer
-    // verification pass) but nothing in this file was listening for it —
-    // flagged answer mismatches were only ever visible in manifest.json
-    // after download, never live during generation.
+    // Answers the independent verifier disagreed with (shown live; also in manifest.json)
     if (msg.type === 'answer_flagged') {
       show(answerFlagContainer);
       (msg.issues || []).forEach(issue => {

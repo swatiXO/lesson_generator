@@ -9,88 +9,81 @@ const PYTHON_PATH = process.env.PYTHON_PATH || 'python';
 const QUERY_SCRIPT_PATH = path.join(__dirname, 'query_kb.py');
 
 /**
- * Queries the textbook vector database.
- * Falls back to empty array if query fails or knowledge base doesn't exist.
+ * Runs query_kb.py once for one or more queries. Starting Python and loading
+ * chromadb + the embedding model dominates the cost of a query, so batching
+ * several queries into one process is much cheaper than one process each.
+ * Resolves to one result array per query; empty arrays on any failure.
  */
-async function queryKnowledgeBase(query, grade, subject = 'Mathematics', limit = 3) {
+function runQueries(queries, grade, subject, limit) {
+  const empty = () => queries.map(() => []);
+
   return new Promise((resolve) => {
-    console.log(`[kb] Querying knowledge base: "${query}" (Grade ${grade}, ${subject}, limit ${limit})...`);
+    const args = [QUERY_SCRIPT_PATH];
+    queries.forEach(q => args.push('--query', q));
+    args.push('--grade', String(grade), '--subject', subject, '--limit', String(limit));
 
-    // [FIX] child_process.spawn expects every element of `args` to be a
-    // string. `grade` and `limit` were previously passed through as raw
-    // numbers (e.g. from currentJob.grade, which is parseInt'd in server.js).
-    // Coerce explicitly with String() so this never depends on Node-version-
-    // specific implicit coercion behavior.
-    const args = [
-      QUERY_SCRIPT_PATH,
-      '--query', query,
-      '--grade', String(grade),
-      '--subject', subject,
-      '--limit', String(limit)
-    ];
+    console.log(`[kb] Querying knowledge base (${queries.length} quer${queries.length === 1 ? 'y' : 'ies'}, ` +
+      `Grade ${grade}, ${subject}, limit ${limit}):`, queries);
 
-    console.log(`[kb] Spawning: ${PYTHON_PATH} ${args.join(' ')}`);
-
-    const py = spawn(PYTHON_PATH, args);
+    const py = spawn(PYTHON_PATH, args, { cwd: __dirname });
     let stdout = '';
     let stderr = '';
-
-    py.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    py.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
+    py.stdout.on('data', (data) => { stdout += data.toString(); });
+    py.stderr.on('data', (data) => { stderr += data.toString(); });
 
     py.on('error', (err) => {
-      // Fires if the python executable itself can't be spawned at all
-      // (wrong PYTHON_PATH, permissions, etc.) — distinct from the process
-      // starting and exiting with a non-zero code, which is handled below.
-      console.warn(`[kb] Failed to spawn Python process: ${err.message}`);
-      resolve([]);
+      // The interpreter itself couldn't start (wrong PYTHON_PATH etc.)
+      console.warn(`[kb] Failed to spawn Python process (${PYTHON_PATH}): ${err.message}`);
+      resolve(empty());
     });
 
     py.on('close', (code) => {
       if (code !== 0) {
         console.warn(`[kb] Python query exited with code ${code}. Stderr: ${stderr.trim()}`);
-        return resolve([]);
+        return resolve(empty());
       }
+      // chromadb prints deprecation warnings to stderr without failing
+      if (stderr.trim()) console.warn(`[kb] Python process exited 0 but wrote to stderr: ${stderr.trim()}`);
 
-      // [FIX] Surface stderr even on a successful (code 0) exit — some
-      // Python warnings (e.g. deprecation notices from chromadb) print to
-      // stderr without causing a non-zero exit code, and silently dropping
-      // them makes it harder to notice when something is subtly wrong.
-      if (stderr.trim()) {
-        console.warn(`[kb] Python process exited 0 but wrote to stderr: ${stderr.trim()}`);
-      }
-
+      let json;
       try {
-        const json = JSON.parse(stdout.trim());
-        if (json.error) {
-          console.warn(`[kb] Error returned from query script: ${json.error}`);
-          return resolve([]);
-        }
-
-        // [FIX] Log which grade(s) actually came back in the results, not
-        // just the count. If you query grade 4 and this shows chunks tagged
-        // grade 6 (or a mix), that's a direct, visible sign the --grade
-        // filter inside query_kb.py isn't actually being applied — much
-        // easier to catch than silently trusting the requested grade was
-        // honored just because a result array came back.
-        const returnedGrades = Array.isArray(json)
-          ? [...new Set(json.map(c => c.grade).filter(g => g !== undefined))]
-          : [];
-        console.log(`[kb] Retrieved ${Array.isArray(json) ? json.length : 0} relevant chunk(s). ` +
-          `Requested grade: ${grade}. Grade(s) actually present in results: ${returnedGrades.length ? returnedGrades.join(', ') : '(none tagged)'}`);
-
-        resolve(json);
+        json = JSON.parse(stdout.trim());
       } catch (err) {
         console.warn(`[kb] Failed to parse JSON output. Raw output was:\n${stdout.trim()}`);
-        resolve([]);
+        return resolve(empty());
       }
+      if (json.error) {
+        console.warn(`[kb] Error returned from query script: ${json.error}`);
+        return resolve(empty());
+      }
+
+      const perQuery = queries.length === 1 ? [json] : json;
+      const all = perQuery.flat();
+      // Logging the grades actually returned makes a broken --grade filter visible.
+      const returnedGrades = [...new Set(all.map(c => c.grade).filter(g => g !== undefined))];
+      console.log(`[kb] Retrieved ${all.length} chunk(s). Requested grade: ${grade}. ` +
+        `Grade(s) present in results: ${returnedGrades.length ? returnedGrades.join(', ') : '(none tagged)'}`);
+      resolve(perQuery.map(r => (Array.isArray(r) ? r : [])));
     });
   });
 }
 
-module.exports = { queryKnowledgeBase };
+/**
+ * Queries the textbook vector database.
+ * Falls back to an empty array if the query fails or the knowledge base doesn't exist.
+ */
+async function queryKnowledgeBase(query, grade, subject = 'Mathematics', limit = 3) {
+  const [results] = await runQueries([query], grade, subject, limit);
+  return results;
+}
+
+/**
+ * Same as queryKnowledgeBase for several queries at once, in one Python process.
+ * Returns one result array per query, in order.
+ */
+async function queryKnowledgeBaseBatch(queries, grade, subject = 'Mathematics', limit = 3) {
+  if (!queries.length) return [];
+  return runQueries(queries, grade, subject, limit);
+}
+
+module.exports = { queryKnowledgeBase, queryKnowledgeBaseBatch };

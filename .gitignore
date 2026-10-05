@@ -22,3 +22,6 @@ job_state.json
 
 # Textbook PDFs are large (40-50MB each) — keep them local, not in git
 textbooks/*.pdf
+
+# Python bytecode
+__pycache__/
