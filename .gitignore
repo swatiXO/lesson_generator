@@ -16,3 +16,9 @@ test_output.pdf
 # OS Metadata
 .DS_Store
 Thumbs.db
+
+# Runtime job snapshot (written after every section by server.js)
+job_state.json
+
+# Textbook PDFs are large (40-50MB each) — keep them local, not in git
+textbooks/*.pdf

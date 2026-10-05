@@ -18,22 +18,46 @@ def parse_filename_metadata(filename):
     Examples:
     - 'Grade4_Maths_Chapter1.pdf' -> grade=4, subject='Mathematics'
     - 'G5_Science.pdf' -> grade=5, subject='Science'
+    - 'Grade10_Maths.pdf' -> grade=10, subject='Mathematics'
+    - 'Grade07_Science.pdf' -> grade=7, subject='Science' (zero-padded)
+
+    [FIX] Previously capped at [1-6] (NCP 2022-23 primary strand only) — the
+    actual scope of this app is Grades 1-12, so a genuine Grade 7-12
+    textbook filename was silently unable to match at all and fell through
+    to the grade=4 default, mislabeling secondary-school content as a
+    primary-grade default. Widened to 1-12, matching either a bare "10"/
+    "11"/"12" OR a zero-padded single digit ("01".."09") so both common
+    filename conventions parse correctly. The trailing negative lookahead
+    (?!\\d) still guards against a 3+ digit run (e.g. "Grade123") being
+    misread as a valid grade prefix.
     """
     name_lower = filename.lower()
-    
+
     # Guess grade
-    grade = 4  # Default
-    grade_match = re.search(r'(?:grade|class|g)[-_\s]*([3-6])', name_lower)
+    grade = None
+    grade_match = re.search(r'(?:grade|class|g)[-_\s]*(1[0-2]|0?[1-9])(?!\d)', name_lower)
     if grade_match:
         grade = int(grade_match.group(1))
-        
+    else:
+        # [FIX] Previously defaulted silently to grade=4 with no warning,
+        # which is exactly how a Grade 1/2 file would get mistagged without
+        # anyone noticing. Now this is loud in the ingestion log, and the
+        # default is applied explicitly (not implicitly via an unreachable
+        # branch) so it's a visible, deliberate fallback rather than a
+        # symptom of the regex being unable to represent certain grades.
+        grade = 4
+        print(f"[!] WARNING: Could not detect grade from filename '{filename}'. "
+              f"Defaulting to Grade {grade} — VERIFY THIS FILE'S ACTUAL GRADE and "
+              f"rename it (e.g. 'Grade2_Maths_Chapter1.pdf') if this default is wrong, "
+              f"then re-run ingestion for this file.")
+
     # Guess subject
     subject = "Mathematics"  # Default
     if "science" in name_lower or "sci" in name_lower:
         subject = "Science"
     elif "english" in name_lower or "eng" in name_lower:
         subject = "English"
-        
+
     return grade, subject
 
 def chunk_text(text, chunk_size=800, overlap=100):

@@ -3,27 +3,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-// Basic helper to load .env file manually (so we don't depend on dotenv npm package if not installed)
-function loadEnv() {
-  const envPath = path.join(__dirname, '.env');
-  if (fs.existsSync(envPath)) {
-    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-    lines.forEach(line => {
-      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
-      if (match) {
-        const key = match[1];
-        let val = match[2] || '';
-        // Remove quotes if present
-        if (val.length > 0 && val.charAt(0) === '"' && val.charAt(val.length - 1) === '"') {
-          val = val.substring(1, val.length - 1);
-        }
-        process.env[key] = val;
-      }
-    });
-  }
-}
 
-loadEnv();
+require('./env');
 
 function searchGoogleImages(query, apiKey, cx) {
   const url = `https://www.googleapis.com/customsearch/v1?q=${encodeURIComponent(query)}&searchType=image&key=${apiKey}&cx=${cx}&num=5`;

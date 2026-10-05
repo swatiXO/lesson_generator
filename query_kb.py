@@ -36,7 +36,10 @@ def main():
         
     # Build where filter
     where_filter = {}
-    if args.grade:
+    # [FIX] Was `if args.grade:` — a truthy check that would silently skip
+    # filtering if grade were ever 0 or any other falsy-but-valid value.
+    # `is not None` is the correct check for "was this argument provided".
+    if args.grade is not None:
         where_filter["grade"] = args.grade
     if args.subject:
         # Let's normalize subject

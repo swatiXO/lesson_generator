@@ -506,6 +506,11 @@
             <option value="4" selected>Grade 4</option>
             <option value="5">Grade 5</option>
             <option value="6">Grade 6</option>
+            <option value="7">Grade 7</option>
+            <option value="8">Grade 8</option>
+            <option value="9">Grade 9</option>
+            <option value="10">Grade 10</option>
+
           </select>
         </div>
         <div class="field">
@@ -521,6 +526,11 @@
       <div class="switch-container">
         <input type="checkbox" id="disableVerificationCheck" checked>
         <label for="disableVerificationCheck"><strong>Disable AI Vision Image Verification</strong> (Speeds up generation, accepts searched images directly without LLM confirmation)</label>
+      </div>
+
+      <div class="switch-container">
+        <input type="checkbox" id="disableSvgDiagramsCheck">
+        <label for="disableSvgDiagramsCheck"><strong>Disable AI-Generated Diagrams</strong> (Speeds up generation by skipping the LLM-drawn SVG diagram step for geometric/structural content — falls back to web image search instead)</label>
       </div>
 
       <label for="slosInput">Student Learning Outcomes (SLOs)</label>
@@ -599,6 +609,11 @@ M-04-A-21: Compare and order unlike fractions."></textarea>
       <div class="validation-log hidden" id="validationLog" role="log" aria-live="polite">
         <strong>⚠️ Self-Correction Logs:</strong>
         <div id="validationLogItems"></div>
+      </div>
+
+      <div class="validation-log hidden" id="answerFlagLog" role="log" aria-live="polite" style="background:#F8D7DA; border-color:#F1AEB5;">
+        <strong style="color:var(--danger)">🚩 Answer Verification Flags:</strong>
+        <div id="answerFlagLogItems"></div>
       </div>
 
       <div class="btn-row" style="margin-top:16px">
@@ -713,7 +728,8 @@ async function generateStructure() {
   const grade = document.getElementById('gradeSelect').value;
   const subject = document.getElementById('subjectSelect').value;
   const disableVerification = document.getElementById('disableVerificationCheck').checked;
-
+  const disableSvgDiagrams = document.getElementById('disableSvgDiagramsCheck').checked;
+  
   if (!slos) { showError('Please paste your SLOs first.'); document.getElementById('slosInput').focus(); return; }
 
   clearError();
@@ -724,7 +740,7 @@ async function generateStructure() {
     const res = await fetch('/api/structure', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slos, grade, subject, disableVerification }),
+      body: JSON.stringify({ slos, grade, subject, disableVerification, disableSvgDiagrams }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Structure plan failed');
@@ -821,8 +837,15 @@ function buildProgressUI(lessons) {
     const chips = document.createElement('div');
     chips.className = 'section-chips';
 
-    const sections = ['Introduction', 'Warm-Up', 'Concept Building', 'Worked Examples', 'Pop-Up Quiz', 'Mental Maths', 'Practice Questions', 'Key Takeaways', 'Video Script'];
-    const sectionKeys = ['introduction', 'warmUp', 'conceptBuilding', 'examples', 'popUpQuiz', 'mentalMaths', 'practiceQuestions', 'keyTakeaways', 'videoScript'];
+    // [FIX] Matches the current v7 backend sectionDefs exactly:
+    // 'examples' was merged into conceptBuilding (inline worked examples,
+    // no longer a separate step), and 'popUpQuiz' was replaced by
+    // 'yourTurnFull' (the consolidated two-column Your Turn section). A
+    // stale list here means these chips never receive their
+    // section_start/section_done events at all — not a cosmetic mismatch,
+    // the whole progress UI silently stops updating for any lesson.
+    const sections = ['Introduction', 'Warm-Up', 'Concept Building', 'Mental Maths', 'Your Turn', 'Practice Questions', 'Key Takeaways', 'Video Script'];
+    const sectionKeys = ['introduction', 'warmUp', 'conceptBuilding', 'mentalMaths', 'yourTurnFull', 'practiceQuestions', 'keyTakeaways', 'videoScript'];
 
     lessonChips[lesson.number] = {};
 
@@ -859,6 +882,8 @@ function listenToGeneration() {
   const tokenEl = document.getElementById('tokenStream');
   const logContainer = document.getElementById('validationLog');
   const logItems = document.getElementById('validationLogItems');
+  const answerFlagContainer = document.getElementById('answerFlagLog');
+  const answerFlagItems = document.getElementById('answerFlagLogItems');
 
   evtSource.onmessage = async (e) => {
     const msg = JSON.parse(e.data);
@@ -902,6 +927,26 @@ function listenToGeneration() {
       item.innerHTML = `⚠️ <strong>Lesson ${msg.lessonNum} - ${msg.section}</strong> failed audit on attempt ${msg.attempt}. <em>Feedback:</em> ${msg.feedback}`;
       logItems.appendChild(item);
       logContainer.scrollTop = logContainer.scrollHeight;
+    }
+
+    // [NEW] The backend already emits this event (server.js's Tier-1 answer
+    // verification pass) but nothing in this file was listening for it —
+    // flagged answer mismatches were only ever visible in manifest.json
+    // after download, never live during generation.
+    if (msg.type === 'answer_flagged') {
+      show(answerFlagContainer);
+      (msg.issues || []).forEach(issue => {
+        const item = document.createElement('div');
+        item.className = 'validation-warning-item';
+        item.style.color = 'var(--danger)';
+        const q = (issue.question || '(question unavailable)').slice(0, 120);
+        item.innerHTML = `🚩 <strong>Lesson ${msg.lessonNum} - ${msg.sectionLabel || msg.section}</strong>: ` +
+          `"${q}" — stated: <strong>${issue.statedAnswer ?? 'N/A'}</strong>, ` +
+          `independently computed: <strong>${issue.computedAnswer ?? 'N/A'}</strong>.` +
+          (issue.explanation ? ` <em>${issue.explanation}</em>` : '');
+        answerFlagItems.appendChild(item);
+      });
+      answerFlagContainer.scrollTop = answerFlagContainer.scrollHeight;
     }
 
     if (msg.type === 'image_start') {
@@ -969,9 +1014,8 @@ function getChipKey(label) {
     'Introduction':        'introduction',
     'Warm-Up':            'warmUp',
     'Concept Building':   'conceptBuilding',
-    'Worked Examples':    'examples',
-    'Pop-Up Quiz':        'popUpQuiz',
     'Mental Maths':       'mentalMaths',
+    'Your Turn':          'yourTurnFull',
     'Practice Questions': 'practiceQuestions',
     'Key Takeaways':      'keyTakeaways',
     'Video Script':       'videoScript',
@@ -1161,6 +1205,8 @@ async function resetAll() {
   document.getElementById('progressTrack').innerHTML = '';
   document.getElementById('validationLogItems').innerHTML = '';
   hide('validationLog');
+  document.getElementById('answerFlagLogItems').innerHTML = '';
+  hide('answerFlagLog');
   setLoading('generateStructureBtn', false, 'Generate Chapter Structure');
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
